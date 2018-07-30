@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1531386233844.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "740154344",
+    "id" : "D033CFA2",
+    "lastKnownWriteTime" : 1531982676,
+    "last_content_update" : 1531982676032,
+    "path" : "/media/renee/Seagate Expansion Drive/Projects/bachas costa/rscreenorm/R/read_screen_data.R",
+    "project_path" : "R/read_screen_data.R",
+    "properties" : {
+        "cursorPosition" : "61,0",
+        "scrollLine" : "0"
+    },
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

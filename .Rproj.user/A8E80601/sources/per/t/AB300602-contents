@@ -1,0 +1,23 @@
+Writing R packages - Hadley Wickham
+
+http://r-pkgs.had.co.nz/
+
+Packages in RStudio:
+
+https://support.rstudio.com/hc/en-us/articles/200486488-Developing-Packages-with-RStudio
+
+Install roxygen2
+
+source("http://www.bioconductor.org/biocLite.R")
+biocLite("roxygen2")
+
+Notes on writing help files using roxygen
+
+https://cran.rstudio.com/web/packages/roxygen2/vignettes/roxygen2.html
+
+Before building package:
+- mark roxygen options under Package build options
+- use CTRL + SHIFT + D to produce .Rd files
+- then build and reload using RStudio
+
+

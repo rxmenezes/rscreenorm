@@ -1,0 +1,66 @@
+# Auxiliary functions to be used by many other functions in the package
+
+#' Checks if an isqn.object has a well type variable
+#'
+#' To be used internally, this function checks for a well type variable
+#' within the isqn.object
+#'
+#' @param data_isqn an isqn.object
+#' @return A logical value that is TRUE is a well type variable is found.
+#' @export
+
+hasWtype <- function(data_isqn){
+  ( wtype %in% colnames(data_isqn[["data_ann"]]) ) | ( wtype_ann %in% names(data_isqn[["data_ann"]]))
+}
+
+#' Gets the number of features in the isqn.object
+#'
+#' To be used internally, this function extracts the number of rows
+#' in the data_only slot of  the isqn.object
+#'
+#' @param data_isqn an isqn.object
+#' @return A numeric value.
+#' @export
+
+nr.screen <- function(data_isqn){
+  nrow(data_isqn[["data_only"]])
+}
+
+#' Gets the number of replicate in the isqn.object
+#'
+#' To be used internally, this function extracts the number of columns
+#' in the data_only slot of  the isqn.object.
+#'
+#' @param data_isqn an isqn.object
+#' @return A numeric value.
+#' @export
+
+nc.screen <- function(data_isqn){
+  ncol(data_isqn[["data_only"]])
+}
+
+
+#' Extracts the number of well types
+#'
+#' To be used internally, this function extracts the number of levels
+#' in the well type variable within a given isqn.object. If the object
+#' has no well type, it will return 0.
+#'
+#' @param data_isqn an isqn.object
+#' @return A numeric value.
+#' @export
+
+nwt <- function(data_isqn){
+  if(hasWtype(data_isqn)) {
+    if(wtype %in% names(data_isqn[["data_ann"]])) {
+      nwt <- nlevels(factor(data_isqn[["data_ann"]][, "wtype"]))
+    } else {
+      nwt <- apply(apply(wtype_ann, 2, factor), 2, nlevels)
+    }
+  } else { nwt <- 0}
+  nwt
+}
+
+
+
+

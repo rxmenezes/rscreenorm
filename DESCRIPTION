@@ -1,0 +1,28 @@
+Package: rscreenorm
+Type: Package
+Title: Normalization of Multiple Genetic Screens Data
+Version: 1.0.0
+Authors@R: person("Renee", "Menezes", email = "r.menezes@vumc.nl",
+                  role = c("aut", "cre"))
+Author: Renee Menezes [aut, cre]
+Maintainer: Renee Menezes <r.menezes@vumc.nl>
+Description: Normalizes data from multiple genetic screens, such 
+    as for example siRNA screens or CRISPR-Cas9 screens, possibly corresponding
+    to different cell lines. Using an invariant set of values for each 
+    replicate, it quantile-normalizes all replicates while preserving 
+    differences in phenotype between them. Raw data can be read in as 
+    tab-delimited files, and must include gene and feature annotation, in 
+    particular indicating which features are part of the library and which ones 
+    are negative/positive controls.
+Depends: R (>= 3.3.1)
+License: GPL-3
+LazyData: TRUE
+RoxygenNote: 6.0.1
+Suggests: grDevices,
+         graphics,
+         stats,
+         utils,
+         knitr,
+        rmarkdown,
+        Mulder2012
+VignetteBuilder: knitr

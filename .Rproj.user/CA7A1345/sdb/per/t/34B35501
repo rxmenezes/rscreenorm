@@ -1,0 +1,20 @@
+{
+    "collab_server" : "",
+    "contents" : "---\ntitle: \"rscreenorm\"\nauthor: \"Renee X. de Menezes\"\ndate: \"`r Sys.Date()`\"\noutput: rmarkdown::html_vignette\nvignette: >\n  %\\VignetteIndexEntry{rscreenorm}\n  %\\VignetteEngine{knitr::rmarkdown}\n  %\\VignetteEncoding{UTF-8}\n---\n\n## Normalization of a single arrayed screen\n\nData for an experiment involving a single screen, corresponding possibly to multiple replicates under different treatment conditions, can be read into the package in one go.\nArrayed screens.\n\n### Reading in the data\n\nSpecify how the data is expected to be. well type variable, use_plate.\n\n```{r read.data}\nread.screen.data()\n```\n\n```{r read.pdata}\nget.pdata()\n```\n\n### Explore the data \n\nboxplots per replicate, plate and well type\n\nDensity plots per replicate and well type\n\n### Normalization per replicate\n\nCompute lethality scores\n\n### Define invariant sets of scores\n\n### Normalization across replicates\n\n\n\n## Normalization of a single pooled screen\n\nData for an experiment involving a single screen, corresponding possibly to multiple replicates under different treatment conditions, can be read into the package in one go.\nPooled screens.\n\n### Reading in the data\n\nSpecify how the data is expected to be. well type variable, use_plate=F.\n\n```{r read.data}\nread.screen.data()\n```\n\n```{r read.pdata}\nget.pdata()\n```\n\n### Explore the data \n\nDensity plots per replicate and well type\n\n### Normalization per replicate\n\nCompute lethality scores\n\n### Define invariant sets of scores\n\n### Normalization across replicates\n\n\n\n## Combining data from multiple screens \n\n\n## Vignette Info\n\nNote the various macros within the `vignette` section of the metadata block above. These are required in order to instruct R how to build the vignette. Note that you should change the `title` field and the `\\VignetteIndexEntry` to match the title of your vignette.\n\n## Styles\n\nThe `html_vignette` template includes a basic CSS theme. To override this theme you can specify your own CSS in the document metadata as follows:\n\n    output: \n      rmarkdown::html_vignette:\n        css: mystyles.css\n\n## Figures\n\nThe figure sizes have been customised so that you can easily put two images side-by-side. \n\n```{r, fig.show='hold'}\nplot(1:10)\nplot(10:1)\n```\n\nYou can enable figure captions by `fig_caption: yes` in YAML:\n\n    output:\n      rmarkdown::html_vignette:\n        fig_caption: yes\n\nThen you can use the chunk option `fig.cap = \"Your figure caption.\"` in **knitr**.\n\n## More Examples\n\nYou can write math expressions, e.g. $Y = X\\beta + \\epsilon$, footnotes^[A footnote here.], and tables, e.g. using `knitr::kable()`.\n\n```{r, echo=FALSE, results='asis'}\nknitr::kable(head(mtcars, 10))\n```\n\nAlso a quote using `>`:\n\n> \"He who gives up [code] safety for [code] speed deserves neither.\"\n([via](https://twitter.com/hadleywickham/status/504368538874703872))\n",
+    "created" : 1509543288625.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "622113387",
+    "id" : "34B35501",
+    "lastKnownWriteTime" : 1509550323,
+    "last_content_update" : 1509550323502,
+    "path" : "/media/renee/Seagate Expansion Drive1/Projects/bachas costa/rscreenorm/vignettes/my-vignette.Rmd",
+    "project_path" : "vignettes/my-vignette.Rmd",
+    "properties" : {
+    },
+    "relative_order" : 3,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

@@ -1,0 +1,21 @@
+{
+    "collab_server" : "",
+    "contents" : "# prepareDataForPublicSubmission.R\n# This is used to prepare data for public submission\n# It is called by main_analysis_lm_lethal_plusJob1fb.R\n# This is no longer used, as I now wrote a separate script - main_prepareDataForPublicSubmission.R\n\n# Add plate - here read the data from Remco Nagel's and get plate ann\n# This object was produced with analysis_overview_wholeGenome.Rm, in folder scripts clPlusFib\ntreat.data <- read.delim(paste(mydir.data,\"/annotation files/RIFOL annotation 96.txt\", sep=\"\" ))\ntreat.data <- treat.data[, c(2,3,4,5,7)]\ntreat.vec <- rep(c(\"Unt\",\"Treat\"), each=26112/2)\nnames(treat.data)[c(2,3)] <- c(\"Plate\", \"Well\")\ntreat.data <- treat.data[ treat.data$WellType==\"sample\", ]\ntreat.data <- treat.data[ !( as.character(treat.data$GeneIDs) %in% c(\"Dummy plate\", \"No siRNA\") ), ]\ntreat.data <- treat.data[ order(as.character(treat.data$GeneIDs)), ]\nsum(as.character(treat.data$GeneIDs) == rownames(mat.sample))\n\nsiRNA.data.library <- mat.sample\n# SCRAMBLE DATA PER PLATE\nsiRNA.data.library <- siRNA.data.library[ sample(1:nrow(siRNA.data.library)), ]\nsum(rownames(mat.sample) == rownames(siRNA.data.library)) # 3, so fully scrambled\nrownames(siRNA.data.library) <- 1:nrow(mat.sample)\ncolnames(siRNA.data.library)[7:9] <- c(\"VU-SCC-1131 1\", \"VU-SCC-1131 2\", \"VU-SCC-1131 3\")\n\nwrite.table(siRNA.data.library, file=\"data_siRNA_wholeGenomeLibrary.txt\", sep=\"\\t\", col.names=NA)\n\nmax.npos <- max(unlist(lapply(mat.pos, length)))\nsiRNA.poscontrols <- matrix(0, nrow=max.npos, ncol=ncol(mat.sample))\ncolnames(siRNA.poscontrols) <- names(mat.pos)\nfor(xi in 1:length(mat.pos))\n{\n  mypos <- mat.pos[[xi]]\n  if(length(mypos)<max.npos) mypos <- c(mypos, rep(NA, max.npos - length(mypos)))\n  siRNA.poscontrols[, xi] <- mypos\n}\n# Checking that the number of NAs is correct\nsum( unlist(lapply(mat.pos, length)) == (max.npos - colSums(is.na(siRNA.poscontrols))) ) # 14, so almost all of them\nnames(mat.pos)[ unlist(lapply(mat.pos, length)) != (max.npos - colSums(is.na(siRNA.poscontrols))) ]\n# \"VU-SCC-120 1\" \"786-O 2\"      \"A549 SC2\"\n# These are indeed the cell lines with NAs, so OK!\n\nmax.nneg <- max(unlist(lapply(mat.sicon, length)))\nsiRNA.negcontrols <- matrix(0, nrow=max.nneg, ncol=ncol(mat.sample))\ncolnames(siRNA.negcontrols) <- names(mat.sicon)\nfor(xi in 1:length(mat.pos))\n{\n  myneg <- mat.sicon[[xi]]\n  if(length(myneg)<max.nneg) myneg <- c(myneg, rep(NA, max.nneg - length(myneg)))\n  siRNA.negcontrols[, xi] <- myneg\n}\nsum( unlist(lapply(mat.sicon, length)) == (max.nneg - colSums(is.na(siRNA.negcontrols))) ) # 12, so almost all of them\nnames(mat.sicon)[  unlist(lapply(mat.sicon, length)) != (max.nneg - colSums(is.na(siRNA.negcontrols))) ]\n#  \"VU-SCC-120 1\"   \"786-O 2\"        \"A549 SC2\"       \"VU1149 Screen1\" \"VU1149 Screen3\"\n# These are again the cell lines with NAs, so it should be fine\n\nwrite.table(siRNA.poscontrols, file=\"data_siRNA_positiveControls.txt\", sep=\"\\t\", col.names=NA)\nwrite.table(siRNA.negcontrols, file=\"data_siRNA_negativeControls.txt\", sep=\"\\t\", col.names=NA)\n",
+    "created" : 1491300074154.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1627056159",
+    "id" : "7CE7BABF",
+    "lastKnownWriteTime" : 1491824563,
+    "last_content_update" : 1491824563,
+    "path" : "/media/renee/Seagate Expansion Drive/Projects/bachas costa/checks data lethal 201601/scripts clPlusfib/prepareDataForPublicSubmission.R",
+    "project_path" : null,
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 7,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

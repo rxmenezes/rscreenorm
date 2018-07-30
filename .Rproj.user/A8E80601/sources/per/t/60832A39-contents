@@ -1,0 +1,706 @@
+---
+title: "rscreenorm"
+author: "Renee X. de Menezes and Costa Bachas"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{rscreenorm}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+```{r echo=FALSE}
+#Note the various macros within the `vignette` section of the metadata block above. These are required in order to instruct R how to build the vignette. Note that you should change the `title` field and the `\VignetteIndexEntry` to match the title of your vignette.
+
+#The `html_vignette` template includes a basic CSS theme. To override this theme you can specify your own CSS in the document metadata as follows:
+
+#    output: 
+#      rmarkdown::html_vignette:
+#        css: mystyles.css
+```
+
+In this vignette we describe how the package rscreenorm can be used to re-scale and normalize genetic screen data, including siRNA and CRISPR screen data.
+
+## Normalization of a single arrayed screen
+
+Our first example consists of normalizing simulated data. In this case, the setup is controlled, including assay controls, and we know which effects are to be corrected for.
+
+The experiment involves 3 cell lines, each observed in two conditions (without and with treatment), and for each condition the cell line is screened multiple times. We assume that the genetic screen used is pooled, so all measurements are obtained at once.
+
+
+```{r load.rscreenorm}
+library(rscreenorm)
+```
+
+### Data simulation
+
+Let us define the setup used here, which is the same as the one used in the article where rscreenorm is proposed.
+
+```{r simul.defineSetup}
+set.seed <- 12345 # 76543
+n.clines <- 6     # number of cell lines
+nlibrary <- 1000  # number of siRNAs in the library
+n.cont <- 200     # number of controls - of negative and positive controls, each
+n.reps <- 3        # Number of replicates per cell line (a single condition per cell line)
+# Starting parameters of control distributions
+mu.neg <- 0
+mu.pos <- 1
+sd.neg <- 0.1
+sd.pos <- sd.neg
+```
+
+
+Specifically, we assume that `r n.clines/2` cell lines are studied, each screened `r n.reps` times. Each cell line is studied once in each condition, namely treatment and control. Each screen involves `r nlibrary` library siRNAs and `r n.cont` negative and positive controls. 
+
+
+
+We simulate values such that those around 0 yield a similar phenotype as the negative controls, and those around 1 yield a similar phenotypes to the positive controls. As such, we can assume that read-out values are between 0 and 1. Based on this, we draw library features means from a Beta distribution with parameters $\alpha, \beta$, where $\beta$ is the scale parameter, and the mean is equal to $\alpha/(\alpha + \beta)$. For pairs of values satisfying $\beta > \alpha > 1$, the resulting mean lies between 0 and 0.5. We will use $\alpha=2, \beta=6$, which yields a Beta distribution with mean $2/8=0.25$. 
+
+Distributions of read-out values may vary per replicate not only with respect to their centers, but also with respect to their dispersions. Here we include a stretching effect of the distributions, which means that cell lines 1 to 3 display increasing variability. We also assume that the stretch effect is the same for both conditions, so no confounding between the technical stretch effect and the condition effect takes place. The stretch effect in essence changes the functional range of replicates, orthogonally to the condition effect.
+
+
+```{r simul.defineParameters}
+par.mat <- c(2, 6)
+stretch <- rep( rep(c(0.6, 1, 1.5),2), each=n.reps) 
+stretch <- stretch + rnorm(length(stretch), mean=0, sd=0.05)
+mu.pos <- mu.pos*stretch
+pi0 <- 0.8  # prop features with the same mean for all cell lines
+```
+
+We assume also that a proportion `r round(pi0, 1)` of all siRNAs do not display differential phenotype between the two conditions. Subsequently, we build the matrix of the expected values per library siRNA and replicate. All siRNAs in the control condition have observations with mean drawn from a Beta distribution with $\alpha=2, \beta=6$, so with mean $0.25$. In the treated condition, siRNAs without a differential phenotype have means drawn from the same distribution, whilst those with differential phenotype are assigned means equal to 0.5, thus displaying a relatively subtle loss of cell viability.
+
+
+```{r simul.SetMeans}
+# Set means
+meanv <- rbeta(nlibrary, shape1=par.mat[1], shape2=par.mat[2]) # means for null features, to be used for all replicates
+mean.eff <- rep(0.5, ceiling((1-pi0)*nlibrary)) 
+all.means1 <- matrix( rep(meanv, n.reps*n.clines/2), nrow=nlibrary, ncol=n.reps*n.clines/2 )
+all.means2 <- rbind( all.means1[ 1:(nlibrary*pi0), ] , 
+                     matrix(mean.eff, nrow=ceiling((1-pi0)*nlibrary), ncol=n.reps*n.clines/2 ) )
+all.means <- cbind(all.means1, all.means2)
+```
+
+Using the matrix of expected values, the data can be generated. We will draw observations for each library siRNA from a normal distribution with mean in the corresponding entry of the expected values matrix, and standard deviation `r round(2*sd.neg, 1)`. Negative controls are also drawn from a normal distribution, with mean `r round(mu.neg, 1)` and standard deviation `r round(sd.neg, 1)`. Positive controls are too drawn from a normal distribution with the same standard deviation  `r round(sd.neg, 1)`, with mean 1  times the stretch.
+
+
+```{r simul.generateData}
+data.mat <- matrix(0, nrow=nlibrary+2*n.cont, ncol=n.clines*n.reps) 
+wt <- c(rep("sample", nlibrary), rep(c("neg","pos"), each=n.cont))
+
+for(xi in 1:(n.clines*n.reps))
+{
+  if(is.null(dim(all.means))) {  
+  data.mat[,xi] <- c(rnorm(nlibrary, mean=all.means, sd=2*sd.neg)*stretch[xi],
+                     rnorm(n.cont, mean=mu.neg, sd=sd.neg),
+                     rnorm(n.cont, mean=mu.pos[xi], sd=sd.pos))
+  } else {
+    data.mat[,xi] <- c(rnorm(nlibrary, mean=all.means[,xi], sd=2*sd.neg)*stretch[xi],
+                       rnorm(n.cont, mean=mu.neg, sd=sd.neg),
+                       rnorm(n.cont, mean=mu.pos[xi], sd=sd.pos))
+  }
+}
+```
+
+We also define labels to represent the different combinations of cell lines and conditions. 
+
+
+```{r simul.clines.labels}
+cline.vec <- rep(1:n.clines, each=n.reps)
+cl.reps <- paste( rep(paste("CL", 1:n.clines, sep=""), each=n.reps), rep(paste("R", 1:n.reps, sep=""), n.clines)  )
+myp <- rep(c(rep(0.95,3),rep(0.70,3)), each=3)  # proportion of features to include in the core set
+colnames(data.mat) <- cl.reps
+```
+
+
+We now create annotation columns such as gene ID and well type. The latter must be called 'wtype', and must contain labels for library siRNAs, negative and positive controls must be 'sample', 'neg' and 'pos', respectively. Then a data frame containing the annotation columns is created. Subsequently, we make an object of class 'rscreen.object' in the format expected by the package for normalization, which means it a list, containing slots: 'data_ann', a data frame with the annotation table; 'data_only', a numeric matrix with the screen data; and `use_plate', a logical variable indicating whether the screens are pooled (FALSE) or arrayed (TRUE).
+
+```{r simul.annot}
+wtype <- factor(c(rep("sample", nlibrary), rep("neg", n.cont), rep("pos", n.cont)))
+data.ann <- data.frame(geneID = paste("Gene", 1:nrow(data.mat), sep=""), 
+                       wtype = wtype )  
+data.screen <- list(data_ann = data.ann, 
+                    data_only = data.mat, 
+                    use_plate = FALSE)
+class(data.screen) <- "rscreen.object"
+```
+
+
+In this example we create this special object because the data is already in R. In the next examples we will see how to read data into the package from tab-delimited files.
+
+
+Finally, we create a phenotypic data object called 'pdata', containing the variables of interest, such as cell line and replicate number. It also includes a vector of colours to be used in plots.
+
+```{r simul.pdata}
+f.cl <- factor(paste( rep(paste("CL",1:n.clines,sep=""),each=n.reps) ))
+# Colours to be used for graphs, one corresponding to each cell line
+vcols <- c("blue","darkblue","darkolivegreen4","red","deeppink4","violet")
+col.cl <- rep(vcols,each=n.reps)
+names(col.cl) <- as.character(f.cl)
+
+pdata <- data.frame(names = cl.reps, clines = f.cl, treat = rep(0:1, each=n.reps))
+pdata$cols_vec = var.in.colour(pdata$clines)[[1]]
+pdata <- list(pdata = pdata, 
+              cols_list = unique(pdata$cols_vec), 
+              list_vars = colnames(pdata))
+```
+
+In later examples we will see a function of the package that reads in tab-delimited files containing phenotypic data frames and formats them in the expected format.
+
+### Explore the data 
+
+The generated data can be explored via various plots. We will here make boxplots per cell line, replicate and well type:
+
+```{r simul.boxplots.rawData, fig.width=7, fig.height=4}
+par(las=2, mar=c(7.5, 3, 5, 1))
+  mydata <- matrix(scr.data(data.screen), 
+         nrow= nr.screen(data.screen)*nc.screen(data.screen),
+         ncol=1)[, 1]
+  wtype.vec <- rep(scr.ann(data.screen)[, "wtype"], nc.screen(data.screen) )
+  cline.vec <- rep(scr.names(data.screen), each=nr.screen(data.screen) )
+  all.cols <- rep(cols(pdata), 
+                  each=nlevels(scr.ann(data.screen)[, "wtype"]))
+  boxplot(mydata ~ wtype.vec + cline.vec, col = all.cols, pch=20, cex=.7,
+          main = "Raw data per replicate and well type",
+          cex.axis = 0.7)
+```
+
+The boxplots make clear that the functional ranges of the cell line-speficic screens vary, as the distance between negative and positive controls change. This functional range variation reflects the stretch effect we introduced. In addition, the variability of cell line-specific screens also varies.
+
+In the code chunk above, we used helper functions 'scr.data' and 'scr.ann', which extract the data and the annotation from the rscreen.object, respectively. Other helper functions used are 'scr.names', 'nr.screen' and 'nc.screen', that extract the column names, the number of rows and the number of columns  of the data object, respectively. Finally, the 'cols' function extracts the vector of colours per replicate from a pdata object.
+
+
+### Normalization across replicates
+
+While the data generated is approximately in the range $[0, 1]$, the functional ranges vary across replicates. We now compute  what we call lethality scores, defined by:
+
+
+$$
+\frac{\mbox{siRNA read-out} - \mbox{average negative controls}}{\mbox{average positive controls} - \mbox{average negative controls}}.
+$$
+Lethality scores are standardized so that values around 0 yield a phenotype similar to that of negative controls, and values around 1 yield a phenotype similar to that of positive controls. They therefore functional ranges comparable across replicates.
+
+Lethality scores are computed  using the function 'get.leth.scores':
+
+```{r simul.get.leth.scores, fig.width=7, fig.height=4}
+lscores <- get.leth.scores(data.screen, rescale = FALSE)
+par(las=2, mar=c(7.5, 3, 5, 1))
+  mydata <- matrix(scr.data(lscores), 
+         nrow= nr.screen(data.screen)*nc.screen(data.screen),
+         ncol=1)[, 1]
+ boxplot(mydata ~ wtype.vec + cline.vec, col = all.cols, pch=20, cex=.7,
+         main = "Lethality scores per replicate and well type",
+         cex.axis = 0.7)
+```
+
+Boxplots of the lethality scores make clear that functional ranges are now comparable. Lethality scores essentially both center and scale the data, taking controls into account. They are computed per replicate independently of all others, using only the replicate-specific assay controls. 
+
+Data can now be normalized using rscreenorm. This uses the lethality scores as input and, taking the middle point between negative and positive control means,  first chooses library features (so excluding controls) to compose a core set of values expected to yield the same distribution across replicates. Note that the core set is constructed per replicate using lethality scores whilst ignoring the identities of the corresponding features, independently of all other replicates. This can be done with the function 'get.inv.set':
+
+
+```{r get.inv.set}
+inv.set <- get.inv.set(lscores, my_gamma = 1, set_shape = "left", var_type = "mad")
+```
+
+This function uses given parameters to build the core set. In this case, we state that all siRNAs with lethality scores closer to negative controls than to positive controls are included in the core set. This corresponds to a value of $\gamma=1$. We also state that the core set is to be composed by values to the left only, corresponding to values nearer 0 than 1. Finally, the distance between negative and positive controls is computed using the median of each of these controls and a measure of their variability; the latter is chosen to be the median absolute deviation (MAD). 
+
+We can check now the replicate-specific proportions of values included in the core set. This helps us understand if some replicates have an under- or over-representation of library features in their corresponding sets. For this, we need to extract an intermediate result, the thresholds used to define the replicate-specific core sets, by means of the function 'get.th.inv.set', to subsequently obtain the core set proportions via 'get.inv.set.prop':
+
+```{r plot.prop.inv, fig.width=7, fig.height=3}
+par(las = 2)
+thres <- get.th.inv.set(lscores, my_gamma = 1, var_type = "mad") 
+myprops <- get.inv.set.prop(lscores, thres, plot = TRUE, cols_list = cols(pdata) )
+```
+
+Proportions of scores included in the core set display acceptable variability in the range `r round(range(myprops), 2)`.
+
+The final step is to compute the quantile-normalized values for scores in the core sets, then apply an equivalent correction to all scores, per replicate. This is done using the function 'get.qnorm'. Boxplots help here again to visualize results:
+
+```{r simul.get.qnorm,  fig.width=7, fig.height=4}
+qnorm.scores <- get.qnorm(lscores, inv.set)
+par(las=2, mar=c(7.5, 3, 5, 1))
+  mydata <- matrix(scr.data(qnorm.scores), 
+         nrow= nr.screen(data.screen)*nc.screen(data.screen),
+         ncol=1)[, 1]
+ boxplot(mydata ~ wtype.vec + cline.vec, col = all.cols, pch=20, cex=.7,
+         main = "Rscreenorm scores per replicate and well type",
+         cex.axis = 0.7)
+```
+
+The function 'get.rscreenorm' is a wrapper which computes the core set and normalizes the data at once: 
+
+```{r .simul.rscreenorm.wrapper}
+qnorm.scores <- get.rscreenorm(lscores, my_gamma = 1, var_type = "mad", set_shape = "left")
+```
+
+Another good way of visualizing results for all replicates simultaneously is to display density plots of library siRNAs (labelled 'sample' in the annotation data). We will do this using the function 'pdw' that plots densities for all replicates, for a chosen well type:
+
+```{r simul.rscreenorm.densplots, fig.width=7, fig.height=4}
+par(mfrow = c(1, 2), mar = c(3, 2.5, 4, 0.5))
+pdw(data.screen, wtype = "sample", mytitle = "Raw data", lcex = .5)
+pdw(qnorm.scores, wtype = "sample", mytitle = "Rscreenorm scores", lcex = .5)
+```
+
+From the graphs above, it is clear that the stretch effects are corrected away.
+
+
+## Analysis of pooled CRISPR screens
+
+### The data
+
+The data we  use for this example was first made public via the article Hart et al. (Mol Sys Biol, 2014). It corresponds to CRISPR genetic screens of cell lines, performed at various time points. The read-out corresponds to the number of reads mapping to each guide RNA in the library, so low values correspond to depletion of cells containing the corresponding guide RNA. For more details, please see the original paper.
+
+First download the data to a local folder. While the data can in principle be read in directly into R via a URL, this fails in some systems due to security constraints. The data can be found in the URL:
+
+http://tko.ccbr.utoronto.ca/
+
+from which you should download files "readcount-HCT116_1-lib1.gz" and "readcount-RPE1-lib1.gz", to follow the script given in this vignette. If desired, of course data for other cell lines can be used, if the script below is adapted.
+
+The corresponding annotation table should also be downloaded, in this case from:
+
+http://www.cell.com/cms/attachment/2112967508/2084194890/mmc2.xlsx
+
+After downloading, this file was saved locally as tab-delimited with name 'annotation_mmc2.txt'.
+
+### Reading in data and annotation per screen
+
+From the local folder, we read in the data for each screen using the function 'read.screen.data'. We need to indicate the folder where files are found, the file name corresponding to the screen data, the number of annotation columns and whether or not the screen includes a plate variable (only the case for arrayed screens spread over multiple plates):
+
+```{r read.data.cris}
+mydir <- getwd()
+vcl <- c("HCT116_1", "RPE1")
+filesToRead <- paste("readcount-", vcl, "-lib1.gz", sep="")
+scr1 <- read.screen.data(mydir = mydir, filename = filesToRead[1],
+                         n_ann_cols = 2, use_plate = FALSE )
+scr2 <- read.screen.data(mydir = mydir, filename = filesToRead[2],
+                         n_ann_cols = 2, use_plate = FALSE )
+```
+
+
+The above gives warnings that no column is available with well type information. Indeed, such information is not available from the annotation columns in the downloaded data, but it is found in the annotation table instead.
+
+The downloaded annotation table can be read in via:
+
+```{r read.ann.cris}
+data.ann.all <- read.delim(file.path(mydir, "annotation_mmc2.txt"), stringsAsFactors=FALSE)
+wellType <- rep("sample", nrow(data.ann.all))
+tab.target <- table(data.ann.all$Target)
+cont.names <- names(tab.target[tab.target>10])
+wellType[data.ann.all$Target %in% cont.names[3:5]] <- "neg"
+wellType[data.ann.all$Target == "chr10Promiscuous"] <- "pos"
+data.ann.all$wtype <- wellType
+```
+
+In the code chunk above, we created a well type variable, using information both in the file as in the published article to designate negative and positive controls.
+
+The screen data read in and the annotation file are not in the same order. To get them in the correct order, we need to order both datasets by the guide RNA sequence, contained in column 'GENE_CLONE' of the 'data_ann' slot of the screen data, and in the 'gRNA.Sequence' column of the annotation data.
+
+```{r order.data}
+ann.screen <- sapply(1:nr.screen(scr1), mysplit, 
+                     char.vector = as.character(scr1[["data_ann"]]$GENE_CLONE),
+                     split.by = "_", result.sel = 2)
+mat.ann <- scr1[["data_ann"]][order(ann.screen), ]
+mat.ann$gRNA <- ann.screen[order(ann.screen)]
+
+scr1[["data_only"]] <- scr1[["data_only"]][order(ann.screen), ]
+scr2[["data_only"]] <- scr2[["data_only"]][order(ann.screen), ]
+scr1[["data_ann"]] <- scr2[["data_ann"]] <- mat.ann
+```
+
+Now we add the well type variable to the 'data_ann' slots of both screens:
+
+```{r wtype.ann.cris}
+scr1[["data_ann"]]$wtype <- scr2[["data_ann"]]$wtype <- wellType
+```
+
+
+### Combining data from two screens
+
+We will now combine the data from these two screens into a single one, to allow for normalization of all replicates from both datasets. We notice first that the screen replicate labels are not  very informative:
+
+```{r labels.cris}
+scr.names(scr1)
+scr.names(scr2)
+```
+
+We now create new replicate labels, making clear which replicates correspond to which cell line. Per cell line, we extract time points and the label 'A, B', then combine this information as well as the cell line into a phenotypic data object. We also add the cell line name to the column names, so as to enable combining the two data sets without mixing up labels. These form the new column names:
+
+```{r newColNames}
+scr1.t <- sapply(1:nc.screen(scr1), mysplit, char.vector = scr.names(scr1), 
+                 split.by = "_", result.sel = 2)
+scr1.lab <- sapply(1:nc.screen(scr1), mysplit, char.vector = scr.names(scr1), 
+                 split.by = "_", result.sel = 3)
+colnames.new <- paste(vcl[1], scr1.t, c(scr1.lab[-length(scr1.lab)], ""), sep = ".")
+colnames(scr1[["data_only"]]) <- colnames.new
+pdata1 <- data.frame(names = colnames.new, clines = rep(vcl[1], length(scr1.t)), treat = scr1.t, cols_vec =rep("blue", nc.screen(scr1)))
+pd1 <- list(pdata = pdata1, cols_list = "blue", list_vars =colnames(pdata1))
+#
+scr2.t <- c(scr.names(scr2)[1], 
+            substr(scr.names(scr2)[-1], start=1, stop=nchar(scr.names(scr2)[-1])-1 ) )
+scr2.lab <- c("", substr(scr.names(scr2)[-1], start=nchar(scr.names(scr2)[-1]),
+                          stop=nchar(scr.names(scr2)[-1])) )
+colnames.new <- paste(vcl[2], scr2.t, scr2.lab, sep = ".")
+colnames(scr2[["data_only"]]) <- colnames.new
+pdata2 <- data.frame(names = colnames.new, clines = rep(vcl[2], length(scr2.t)), treat = scr2.t, cols_vec =rep("red", nc.screen(scr2)))
+pd2 <- list(pdata = pdata2, cols_list = "red", list_vars =colnames(pdata2))
+```
+
+Note that each pdata is a list involving a data.frame called 'pdata' and two character vectors, 'cols_list' and 'list_vars', containing the list of unique colours corresponding to the cell lines in the corresponding data and the column names of 'pdata', respectively.
+
+Subsequently, we will combine the two screen objects, and the two pdata objects, into a single one. This is done by the functions 'combine.screens' and 'combine.pdata':
+
+```{r combine.screens.cris}
+scr.data <- combine.screens(list(scr1, scr2))
+pdata <- combine.pdata(list(pd1, pd2))
+col.cl <- pdata[["pdata"]]$cols_vec
+names(col.cl) <- as.character(pdata[["pdata"]]$clines)
+```
+
+
+
+### Explore the data 
+
+We start by making plots of the data as read in. We choose to display density plots of library guide RNAs, negative and positive controls per replicate. For this, we use the function 'pdmw' that plots densities of multiple well types, per replicate:
+
+```{r densityPlotsWithControls.cripsr, fig.width=7, fig.height=3}
+par(mfrow=c(1,3), mar=c(4, 3, 1, 1))
+pdmw(scr.data, pdata, use.wt = c("sample", "pos", "neg"), na.rm = TRUE,
+                 plot = TRUE, rescale = TRUE, scale.fun = "asinh", myxlab = "asinh values",
+                 mytitle = FALSE, add.text = TRUE, add.leg = TRUE, lcex=.5)
+```
+
+Note that, as the data corresponds to read counts, re-scaling is useful for graphic display. Here we use the hyperbolic-arc sine (asinh) transformation, which is equivalent to a logarithmic transformation for middle to large counts, and similar to a linear transformation to low counts, also allowing for zeros in the data.
+
+One important feature highlighted in the graphs above is that positive controls used do not all lead to cell depletion, what is clear from their bimodal distribution for each of the replicates. Rscreenorm works best with positive controls that reliably lead to the desired phenotype. For this reason, we will select a subset of these positive controls that consistently lead to cell depletion. 
+
+The bimodal densities of positive controls above display separation between the two components around values 4 and 2 (on the hyperbolic-arc sine scale) for the HCT116 and RPE1 cell lines, respectively. We will therefore use as positive  controls for normalization with rscreenorm those that most often yield phenotype in the left-most component, i.e. below either 4 for HCT116 replicates, or 2 for RPE1 replicates.
+
+We now compute the number of times each guide RNA labelled as positive control yield phenotype in the lower component:
+
+```{r count.leth.posControls}
+mycut <- rep(4, nc.screen(scr.data))
+mycut[ pdata[["pdata"]]$names == "RPE1" ] <- 2
+pos.0 <- NULL
+for(xi in 1:nc.screen(scr.data))
+   pos.0 <- cbind(pos.0, scr.data(scr.data)[ scr.ann(scr.data)[["wtype_ann"]][, xi] == "pos", xi] <= mycut[xi])
+rownames(pos.0) <- scr.data[["data_ann"]][["data_ann"]][ scr.data[["data_ann"]][["wtype_ann"]][, 1] == "pos", "gRNA"]
+n.0s <- apply(pos.0, 1, sum)
+table(n.0s)
+```
+
+So, a total of `r sum(table(n.0s)[19:21])` guide RNAs will be used by rscreenorm as positive controls. We now update the annotation.
+
+```{r cris.newposcont}
+oldPos <- rownames(pos.0)[n.0s < 18]
+wtype.new <- scr.ann(scr.data)[["wtype_ann"]]
+wtype.new[ scr.ann(scr.data)[["data_ann"]]$gRNA %in% oldPos, ] <- "random"
+scr.data[["data_ann"]][["wtype_ann"]] <- wtype.new
+```
+
+
+### Normalization using wrapper
+
+We now compute lethality scores, and then use the wrapper function to normalize all screens. As lethality scores are computed subtracting means, it works best if the measurement error is approximately on a linear scale. For this reason, we rescale the data before computing the scores, again using the hyperbolic-arc sine: 
+
+
+```{r cris.rscreenorm.wrapper}
+lscores <- get.leth.scores(scr.data, rescale = TRUE, scale.fun = "asinh")
+norm.scores <- get.rscreenorm(lscores, prop = 0.95, var_type = "mad", set_shape = "left")
+```
+
+The lethality scores and normalized scores for all replicates can be seen in the graphs below. It is clear that some variability between replicates remains after computing lethality scores, and that is corrected for by rscreenorm. Importantly, since rscreenorm only uses part of the lethality scores for the normalization, the cell depletion effects on the upper tail are preserved.
+
+```{r cris.rscreenorm.densplots, fig.width=7, fig.height=4}
+par(mfrow = c(1, 2), mar = c(5, 2.5, 5, 0.5))
+pdw(lscores, wtype = "sample", mytitle = "Lethality scores", lcex=.4,
+    xlim = range(scr.data(lscores)), myxlab = "", leg.side = "left")
+pdw(norm.scores, wtype = "sample", mytitle = "Rscreenorm scores", lcex=.4,
+    xlim = range(scr.data(norm.scores)), myxlab = "", leg.side = "left")
+```
+
+
+
+
+## When no assay control pair is available
+
+
+### The data: arrayed screens
+
+We use the data from Mulder *et al.* (*Nature Cell Biology*, 2012)
+
+https://www.nature.com/articles/ncb2520#methods
+
+which is available via the Bioconductor data package ``Mulder2012''. The data consists of cell viability measurements, yielded by scanner read-outs. As before, lower read-outs correspond to loss of viability.
+
+The data package can be installed using: 
+
+```{r install.libraries, eval=FALSE}
+source("http://bioconductor.org/biocLite.R")
+# Before installation, run on terminal:
+# sudo apt-get install libmpfr-dev -y
+biocLite("Mulder2012")
+biocLite("Rmpfr")
+```
+
+Once the library is loaded, the raw data can be assessed as indicated below, where we create shorter names for the data and annotation objects for convenience.
+
+
+```{r muld.load.data, message = FALSE, warning = FALSE}
+library(Mulder2012)
+# Raw data
+data(Mulder2012.rawScreenData)
+mrd.all <- rawScreenData
+# Annotation
+data(Mulder2012.rawScreenAnnotation)
+mann <- rawScreenAnnotation
+```
+
+
+
+The data object contains `r nrow(mrd.all)` rows and includes annotation as well as data columns:
+
+```{r muld.cols.data}
+colnames(mrd.all)
+```
+
+The "CHANNEL" column indicates whether channel 700 or 800 was used. Here we will use data for channel 700, which should not involve the TG1 phenotype.  The number of rows in the data using values for a single channel is reduced to `r nrow(mrd.all)/2`.
+
+```{r def.muld.dataPerchannel}
+mrd <- mrd.all[mrd.all$CHANNEL == "700", ] # Check if this is the channel to be used
+```
+
+
+### Annotation and pdata
+
+The annotation object contains `r nrow(mann)` rows and includes gene annotation:
+
+```{r muld.cols.ann}
+colnames(mann)
+```
+
+
+The screen involves 4 plates, as we can see below, and each condition is observed in triplicate.
+
+```{r muld.check.plates.reps}
+table(mrd$PLATE)
+```
+
+Positive controls for the *TG1* phenotype are labelled as "control" in the annotation file, column "ACC.NUMB". They correspond to symbols *TG1 A* and *TG1 B*, as we can see below. Each of these siRNAs are spotted once per plate, so a total of  `r sum(mann$ACC.NUMB == "control")` controls are available, per replicate.
+
+
+```{r muld.poscontrols}
+table(as.character(mann$SYMBOL)[mann$ACC.NUMB=="control"], mann$PLATE[mann$ACC.NUMB=="control"])
+```
+
+Note that, since the channel 700 data corresponds to the screens without the *TG1* phenotype, the controls above are not expected to display the cell viability loss phenotype. However, we expect them to yield a comparable phenotype across plates and replicates.
+
+We now create the screen data object, with format as expected by the rscreenorm package.
+
+```{r muld.annot}
+wtype <- rep("sample", nrow(mrd))
+wtype[mann$ACC.NUMB == "control"] <- rep("pos", sum(mann$ACC.NUMB == "control"))
+data.ann <- data.frame(geneID = as.character(mann$SYMBOL), 
+                       accnum = mann$ACC.NUMB,
+                       wtype = wtype,
+                       plate = mann$PLATE)  
+data.screen <- list(data_ann = data.ann, data_only = as.matrix(mrd[, -(1:3)]), 
+                    use_plate = TRUE, hasWtype = TRUE)
+class(data.screen) <- "rscreen.object"
+```
+
+
+We also make  a pdata object with the conditions and replicates known, corresponding to single-channel data. The column names of the data columns are used to connect it to the pdata object. The resulting pdata object consists of:
+
+```{r muld.def.pdata}
+treat <- colnames(mrd)[seq(from=4, by=3, length.out=5)] 
+treat <- substr(treat, start=1, stop=nchar(treat)-2)
+pdata <- data.frame( names = colnames(mrd)[-(1:3)],
+                     treat = rep(treat, each=3),
+                     replicate = rep(1:3, 5),
+                     cols_vec = var.in.colour(rep(treat, each=3))[[1]])
+pdata <- list(pdata = pdata, 
+              cols_list = unique(pdata$cols_vec), 
+              list_vars = colnames(pdata))
+```
+
+
+### Exploring the data
+
+Density plots of the raw data, grouped per condition,  look as follows:
+
+```{r muld.plot.dens.rawData, fig.width=6, fig.height=6}
+pdw(data.screen, wtype = "sample", mytitle = "Raw data", mycols = cols(pdata), lcex=.7 )
+```
+
+
+The data above displays some asymmetry, so we transform the data using a log2 transformation to see if we get more symmetric per-replicate data distributions. To this plot, we add the positive controls.
+
+
+```{r muld.plot.dens.log2Data, fig.width=7, fig.height=6}
+# Create a vector of unique colours corresponding to the treatment levels
+vcols <- var.in.colour(pdata[["pdata"]]$treat)[[2]]
+# Attribute names to this vector representing the treatment levels
+names(vcols) <- var.in.colour(pdata[["pdata"]]$treat)[[3]]
+# Make the density plots
+accnum <- scr.ann(data.screen)$accnum
+par(mfrow=c(2, 3), mar = c(5, 2.5, 5, 0.5))
+for(xi in levels(pdata[["pdata"]]$treat))
+{ 
+ pdw(data.screen, 
+     sel.reps = scr.names(data.screen)[ pdata[["pdata"]]$treat == xi ], wtype = "sample", 
+     mycols = rep(vcols[xi], sum(pdata[["pdata"]]$treat == xi)),
+     rescale = TRUE, scale.fun = "log2", 
+     mytitle = "log2-raw data", lcex=.5)
+  mypch <- 1:2
+  mcont <- log2(scr.data(data.screen)[accnum =="control", pdata[["pdata"]]$treat == xi])
+  mcann <- scr.ann(data.screen)[accnum == "control", ]
+  xk <- 1
+  for(xi in unique(as.character(mcann$geneID)))
+  { 
+    points(as.matrix(mcont[mcann$geneID==xi, ]), rep(0, ncol(mcont) * nrow(mcont)/2), 
+           pch = mypch[xk], col="red", cex=2)
+    xk <- xk+1
+  }
+  legend("topleft", 
+         legend=unique( scr.ann(data.screen)$geneID[accnum == "control"] ), 
+         pch=1:2, col="red", cex=.8)
+
+}
+```
+
+
+
+As we indeed get more symmetric distributions, we use the rescaled data from now on. Note that the *TG1* controls yield measurements in the entire functional range. This was expected since, this being the control condition (channel 700), *TG1* should not yield a lethal phenotype.
+
+
+Boxplots of the rescaled raw data separately for each replicate and according to plate suggest at least a plate effect, with some plates consistently yielding  different levels, such as plate 4:
+
+```{r muld.boxplots.rescaledrawdata, fig.width=7, fig.height=3}
+myylim <- range(log2(scr.data(data.screen)))
+par(mfrow=c(1, 3), mar = c(5, 2.5, 5, 0.5))
+for(xj in 1:nc.screen(data.screen))
+{  
+    boxplot(log2(scr.data(data.screen))[, xj] ~ 
+              factor(data.screen[["data_ann"]]$plate),
+            main=paste(scr.names(data.screen)[xj]),
+            col=cols(pdata)[xj], ylim=myylim )
+  mcont <- log2(scr.data(data.screen)[accnum =="control", xj])
+  mcann <- scr.ann(data.screen)[accnum =="control", ]
+    xk <- 1
+    for(xi in unique(as.character(mcann$geneID)))
+    { 
+      points(mcann$plate[mcann$geneID==xi], mcont[mcann$geneID==xi],  
+             pch = mypch[xk], col="black", cex=2)
+      xk <- xk+1
+  }
+}
+```
+
+In the above, values for the same *TG1* controls are displayed, now per plate. Here it is again clear that these siRNAs  do not yield  a lethal phenotype, except perhaps for those on plate 2 of 'vehicle' replicates.
+
+We also see that replicates of condition "AG148+BMP2/7" yield smaller values and display less variability than the remaining ones. 
+
+The above graphs highlight plate and replicate as sources of variation, but there are also clear diffferences between conditions. However, we lack reliable controls. Next, we will look for siRNAs that can represent references for the functional range.
+
+
+### Absence of pair of assay controls
+
+The *TG1* assay controls consistently yield values within the box for that plate and replicate, so they seem to yield phenotypes that are similar to the middle 50% of the siRNAs, except perhaps for some variability between replicates of the same condition. This means in particular that we can assume phenotypes yielded per plate could be centered around the same value, for example the one given by the average of the two *TG1* assay controls. 
+
+The only exception for the assay controls appearing in the the middle of the data points is for plate 2 of all "vehicle" replicates, where they are consistenly lower. Given the reproducibility of this trend across the triplicates and the lack of other siRNAs that could yield another reference value, we will center these plates using their *TG1* assay controls as all others.
+
+However, these are not enough to yield reliable representations of the functional ranges, which would have relied on both negative as well as positive assay controls. So we need to consider another approach that will enable us to make measurements per plate comparable.
+
+
+
+```{r muld.def.centerPerPlateTG1}
+tgdata <- log2(scr.data(data.screen))[accnum == "control", ]
+tgplate <- scr.ann(data.screen)$plate[accnum == "control"]
+data.c <- scr.data(data.screen)
+
+for(xj in 1:nc.screen(data.screen))
+{  
+  mtgp <- tapply(tgdata[, xj], INDEX=list(factor(tgplate)), mean)
+  mdatap <- NULL
+  for(xp in 1:4)
+  {
+      mdata <- log2(scr.data(data.screen))[scr.ann(data.screen)$plate == xp, xj] - mtgp[xp]
+      mdatap <- c(mdatap, mdata)
+  }
+  data.c[, xj] <- mdatap
+}
+mylimc <- range(data.c)
+```
+
+Boxplots of the *TG1*-centered data display smaller plate effects in general, while those for plate 2 of "vehicle" replicates now look relatively larger:
+
+```{r muld.boxplots.logCdata, fig.width=7, fig.height=3}
+par(mfrow=c(1, 3), mar = c(5, 2.5, 5, 0.5))
+for(xj in 1:nc.screen(data.screen))
+{  
+  boxplot(data.c[, xj] ~ factor(scr.ann(data.screen)$plate), main=paste(scr.names(data.screen)[xj]),
+            col=cols(pdata)[xj], ylim=mylimc )
+  mcont <- data.c[accnum =="control", xj]
+  mcann <- scr.ann(data.screen)[accnum =="control", ]
+  xk <- 1
+  for(xi in unique(as.character(mcann$geneID)))
+    { 
+      points(mcann$plate[mcann$geneID==xi], mcont[mcann$geneID==xi],  
+             pch = mypch[xk], col="black", cex=2)
+      xk <- xk+1
+   }
+}
+```
+
+We also noticed that the centering seems to be less effective in correcting plate effects when the two *TG1* values display considerable variability, as expected. In addition, there is no guarantee that functional ranges were made comparable as we have no positive controls. We now make a new rscreen object with the centered values.
+
+```{r muld.newrscreen.data}
+data.screen.c <- data.screen
+data.screen.c[["data_only"]] <- data.c
+```
+
+In spite of the functional ranges not being as comparable as they could have been had a pair of assay controls been available, density plots of all values per replicate now display less variability between replicates and between conditions, compared with the raw data:
+
+
+```{r muld2.plot.dens.log2Data.all, fig.width=7, fig.height=4}
+par(mfrow=c(1, 2), mar = c(5, 2.5, 5, 0.5))
+pdw(data.screen, mycols = as.character(cols(pdata)), rescale = TRUE, scale.fun = "log2",
+    xlim = c(myylim[1], myylim[2]*1.2), 
+    myxlab = "log2-raw values", lcex=.5)
+
+pdw(data.screen.c, mycols = as.character(cols(pdata)), rescale = FALSE, 
+    xlim = c(mylimc[1], mylimc[2]*1.2), 
+    myxlab = "log2 plate-centered values", lcex=.5)
+```
+
+
+Note that  
+the heavier upper-tail for the "vehicle" replicates arises due to plate 2.
+
+
+### Core-set based-quantile normalization
+
+We now select a core set and normalize the data distributions. We select 2/3 of the data values as core set, per replicate, yielding `r round(332*2/3)` measurements.
+
+For this, we will use the plate-centered screen data we have instead of lethality scores, since the latter require both negative and positive assay controls, by definition.
+
+```{r muld.lscores}
+mann$wtype <- rep("sample", nrow(mann))
+lscores <- list(data_only = data.c, data_ann = mann, use_plate = FALSE)
+class(lscores) <- "rscreen.object" 
+norm.data <- get.rscreenorm(lscores, var_type = "mad", prop = 0.67, set_shape = "left")
+```
+
+The data densities then become:
+
+
+```{r muld.plot.dens.rscreenormData, fig.width=7, fig.height=4}
+par(mfrow=c(1, 2), mar = c(5, 2.5, 5, 0.5)) 
+pdw(data.screen, mycols = as.character(pdata$pdata$cols_vec), myxlab = "raw values", lcex=.5)
+pdw(norm.data, mycols = as.character(pdata$pdata$cols_vec), myxlab = "rscreenorm scores", lcex=.5)
+```
+
+
+
+

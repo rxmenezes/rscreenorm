@@ -1,0 +1,21 @@
+{
+    "collab_server" : "",
+    "contents" : "myname <- \"Blijlevens Maxime\"\nmydrive <- \"/media/renee/Seagate Expansion Drive1/\"\nmydir.base1 <- paste(mydrive, \"Projects/\", sep=\"\")\nmydir.base <- paste(mydrive, \"Projects/HT screens Beusechem/\", sep=\"\")\nmydir <- paste(mydir.base,myname,sep=\"\")\nmydir.scripts <- paste(mydir,\"/scripts\",sep=\"\")\nmydir.data <- paste(mydir,\"/data\",sep=\"\")\nmydir.output <- paste(mydir,\"/outputTest\",sep=\"\")\n\nexperimentName <- \"Blijlevens\"\n",
+    "created" : 1510131911231.000,
+    "dirty" : true,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "658775778",
+    "id" : "15E8A845",
+    "lastKnownWriteTime" : 7019251881019908640,
+    "last_content_update" : 1510131914581,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

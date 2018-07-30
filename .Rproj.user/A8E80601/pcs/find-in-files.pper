@@ -1,0 +1,10 @@
+{
+    "dialog-state" : {
+        "caseSensitive" : false,
+        "filePatterns" : [
+        ],
+        "path" : "/media/renee/Seagate Expansion Drive/Projects/bachas costa/rscreenorm",
+        "query" : "data.prot",
+        "regex" : false
+    }
+}

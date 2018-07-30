@@ -1,0 +1,277 @@
+# get_qnorm.R
+
+#' Quantile-normalizes screen data using core sets
+#'
+#' This is a wrapper for multiple functions, that will determine core sets and
+#' quantile-normalize scores for all replicates in a dataset.
+#' @aliases getrscreenorm
+#' @concept scores screen siRNA CRISPR CRISPR-Cas9 crispr-cas9 CRISPR/Cas9 crispr/cas9 quantile normalization
+#'
+#' @param data_rscreen an object of class 'rscreen.object', most likely corresponding to lethality scores
+#' produced by \code{\link{get.leth.scores}}. It is also possible to normalize re-scaled screen
+#' viability data, such as yielded by \code{\link{read.screen.data}}, or by \code{\link{combine.screens}},
+#' although these tend to be less comparable between cell lines and replicates than the scores.
+#' @param n_perc number of percentiles to be used to yield a representation of each
+#' core set. The default value is 1000, which is appropriate for pooled, whole
+#' genome screens. For small, hit-picking screens a smaller number may be more appropriate.
+#' The user may check the core set sizes to decide if in doubt. Note that the value
+#' of \code{n_perc}  should not be larger than that of any core set.
+#' @inheritParams get.inv.set
+#' @return An object of class rscreen.object, with its 'data_only' slot containing quantile-normalized
+#' lethality scores.
+#' @examples
+#' # See vignette
+#' @export
+#' @seealso \code{\link{read.screen.data}} on reading screen data, \code{\link{combine.screens}}
+#' to combine data from multiple screens into a single object, \code{\link{get.inv.set}} for
+#' obtaining core sets for all replicates in the dataset and \code{\link{get.leth.scores}}
+#' to compute lethality scores.
+#'
+
+get.rscreenorm <- function(data_rscreen, my_gamma = NULL, var_type = c("mad", "IQR", "sd"),
+                        prop = 0.95, set_shape = c("left","centre"), n_perc = 1000){
+  if (class(data_rscreen) != "rscreen.object")
+    stop("The input data \"data_rscreen\" is not an rscreen.object")
+  if (!is.numeric(n_perc)) stop("Argument \"n_perc\" must be numeric")
+  if (length(n_perc) > 1) {
+    n_perc <- n_perc[1]
+    warning("Argument \"n_perc\" has length > 1; only the first value will be used")
+  }
+ inv_set <- get.inv.set(data_rscreen, my_gamma = my_gamma, var_type = var_type,
+                          prop = prop, set_shape = set_shape)
+  data_perc <- get.perc(data_rscreen = data_rscreen, inv_set = inv_set, n_perc = n_perc)
+  data_perc_qn <- get.perc.qnorm(data_perc = data_perc)
+  data_qn <- get.all.qnorm(data_rscreen = data_rscreen, data_perc = data_perc, data_perc_qn = data_perc_qn)
+  # Make rscreen.object with data_qn, data_ann, use_plate
+  data_rscreen2 <- list(data_ann = data_rscreen[["data_ann"]],
+                     data_only = data_qn,
+                     use_plate = data_rscreen[["use_plate"]])
+  class(data_rscreen2) <- "rscreen.object"
+  data_rscreen2
+}
+
+
+
+#' Quantile-normalizes screen data using given core sets
+#'
+#' This is a wrapper for multiple functions, that will for given core sets yield
+#' quantile-normalize scores for all replicates.
+
+#' @aliases getqnorm
+#' @concept scores screen siRNA CRISPR CRISPR-Cas9 crispr-cas9 CRISPR/Cas9 crispr/cas9 quantile normalization
+#'
+#' @param inv_set a logical matrix with the same dimensions as the 'data_only' slot in \code{data_rscreen},
+#' indicating the observations that belong to the core set. This is typically the output of
+#' \code{\link{sel.scores.inv.set}}.
+#' @inheritParams get.rscreenorm
+#' @return An object of class rscreen.object, with its "data_only" slot containing quantile-normalized
+#' lethality scores.
+#' @examples
+#' # See vignette
+#' @export
+#' @seealso \code{\link{get.rscreenorm}} which yields core sets and quantile-normalizes data at
+#' once, \code{\link{get.inv.set}} for obtaining core sets for all replicates in the dataset
+#' and \code{\link{get.leth.scores}} to compute lethality scores.
+#'
+
+
+get.qnorm <- function(data_rscreen, inv_set, n_perc = 1000){
+  if ( class(data_rscreen) != "rscreen.object" ) stop("The input data \"data_rscreen\" is not an rscreen.object")
+  if (!is.numeric(n_perc)) stop("Argument \"n_perc\" must be numeric")
+  if (length(n_perc) > 1) {
+    n_perc <- n_perc[1]
+    warning("Argument \"n_perc\" has length > 1; only the first value will be used")
+  }
+  data_perc <- get.perc(data_rscreen = data_rscreen, inv_set = inv_set, n_perc = n_perc)
+  data_perc_qn <- get.perc.qnorm(data_perc = data_perc)
+  data_qn <- get.all.qnorm(data_rscreen = data_rscreen, data_perc = data_perc, data_perc_qn = data_perc_qn)
+  # Make rscreen.object with data_qn, data_ann
+  data_rscreen2 <- list(data_ann = data_rscreen[["data_ann"]],
+                     data_only = data_qn,
+                     use_plate = data_rscreen[["use_plate"]])
+  class(data_rscreen2) <- "rscreen.object"
+  data_rscreen2
+}
+
+
+
+#' Computes percentiles for observations in the core set
+#'
+#' This is an internal function that
+#' computes percentiles for the data in the core set. This function is
+#' called by both \code{\link{get.rscreenorm}} and \code{\link{get.qnorm}}. It is to be used
+#' internally, so has no functionality other than what is described.
+
+#' @aliases getperc
+#' @concept scores screen siRNA CRISPR CRISPR-Cas9 crispr-cas9 CRISPR/Cas9 crispr/cas9 quantile normalization
+#'
+#' @param inv_set a logical matrix with the same dimensions as the 'data_only' slot in \code{data_rscreen},
+#' indicating the observations that belong to the core set. This is typically the output of
+#' \code{\link{sel.scores.inv.set}}.
+#' @inheritParams get.rscreenorm
+
+#' @return a matrix with as many rows as n_perc and as many columns as in the data_only slot
+#' of data_rscreen, containing the percentiles for the core sets, per replicate.
+#' @export
+#' @seealso \code{\link{get.rscreenorm}} which yields core sets and quantile-normalizes data at
+#' once, code{\link{get.qnorm}} which quantile-normalizes data for a given core set, \code{\link{get.inv.set}} for
+#' obtaining core sets for all replicates in the dataset and \code{\link{get.leth.scores}} to compute lethality scores.
+#'
+
+get.perc <- function(data_rscreen, inv_set, n_perc = 1000){
+  data_only <- data_rscreen[["data_only"]]
+  data_ann  <- data_rscreen[["data_ann"]]
+  mypm <- (1:n_perc)/n_perc
+  data_perc <- matrix(0, nrow = n_perc, ncol = ncol(data_only))
+  colnames(data_perc) <- colnames(data_only)
+  # Same annotation, as matrix, for all data
+  if ( !is.null(dim(data_ann)) ){
+    if( hasWtype(data_rscreen)){
+    wtype_mat <- matrix(rep(as.character(data_ann$wtype),ncol(data_only)),
+                        nrow=nrow(data_only),ncol=ncol(data_only))
+    } else {
+      wtype_mat <- matrix(rep(as.character("sample"), nrow(data_only)*ncol(data_only)),
+                          nrow=nrow(data_only), ncol=ncol(data_only))
+      warning("No well type information was found; all wells assumed to be library features")
+    }
+    # Different annotation per replicate, in matrix that is part of data_ann, a list
+  } else if (class(data_ann) == "list") {
+    if( hasWtype(data_rscreen) ){
+    wtype_mat <- data_ann[["wtype_ann"]]
+    } else {
+      wtype_mat <- matrix(rep(as.character("sample"), nrow(data_only)*ncol(data_only)),
+                          nrow=nrow(data_only), ncol=ncol(data_only))
+      }
+    }
+  let_res <- get.list.res(data_only = data_only, wtype_mat = wtype_mat)
+  for(xi in 1:ncol(data_only)) {
+    data_perc[, xi] <- quantile(let_res[["mat_let"]][ inv_set[, xi], xi ] , probs = mypm, na.rm=T)
+  }
+  data_perc
+}
+
+
+#' Quantile-normalizes percentiles for observations in the core set
+#'
+#' This is an internal function that yields
+#' quantile-normalizes percentiles for the data in the core set.
+#' This function is called by both \code{\link{get.rscreenorm}} and \code{\link{get.qnorm}}. It is
+#' to be used internally, so has no functionality other than what is described.
+#' @aliases getpercqorm
+#' @concept scores screen siRNA CRISPR CRISPR-Cas9 crispr-cas9 CRISPR/Cas9 crispr/cas9 quantile normalization
+#'
+#' @param data_perc a numeric matrix of percentiles, with as many columns as samples and as many rows
+#' as percentiles
+
+#' @return a numeric matrix with the same dimensions as the input \code{data_perc}, containing the quantile-
+#' normalized percentiles for the core sets, per replicate
+#' @export
+#' @seealso \code{\link{get.rscreenorm}} which yields core sets and quantile-normalizes data at
+#' once, code{\link{get.qnorm}} which quantile-normalizes data for a given core set,
+#' \code{\link{get.leth.scores}} to compute lethality scores, and \code{\link{get.perc}} to compute
+#' the percentiles.
+#'
+
+get.perc.qnorm <- function(data_perc){
+  l_perc <- vector("list",ncol(data_perc) )
+  names(l_perc) <- colnames(data_perc)
+  my_sum <- rep(0, nrow(data_perc))
+  for(xi in 1:ncol(data_perc))
+  {
+    l_perc[[xi]] <- cbind( data_perc[,xi],1:nrow(data_perc) )
+    l_perc[[xi]] <- l_perc[[xi]][ order( data_perc[,xi] ) , ]
+     my_sum <- my_sum + l_perc[[xi]][  ,1 ]
+  }
+  my_mean <- my_sum/ncol(data_perc)
+  # The normalized data is formed by the re-ordered first columns, or
+  data_perc_qn <- data_perc
+  for(xi in 1:ncol(data_perc)) data_perc_qn[,xi] <- my_mean[ order( l_perc[[xi]][  ,2 ] ) ]
+  data_perc_qn
+}
+
+#' Given a fit object and a new data, yields predictions of the fit object for all obs in new data
+#' by using the predict() within the data range, and a shift outside of this range (so this
+#' involves a piecewise-linear prediction rule)
+#'
+#' This is an internal function that computes fitted values for observed values in the core set range,
+#' and for those outside it uses a extrapolation equivalent to a shift. It is called by
+#' \code{\link{get.all.qnorm}} and is to be used internally, so has no functionality other
+#' than what is described.
+#' @param my_fit an object of class "lm", generated by a call to \code{\link{lm}}. It is expected
+#' to represent the regression of the observed percentiles to their quantile-normalized values.
+#' @param newdata numeric vector containing all lethality scores, for which predictions will be made
+#' based upon the fit given by \code{my_fit}
+#' @param mymin_pm numeric (scalar), the minimum value for the core set lethality scores
+#' @param mymax_pm numeric (scalar), the maximum value for the core set lethality scores
+
+#' @return a numeric vector with as many entries as \code{newdata},containing the predicted values,
+#' which correspond to the quantile-normalized lethality scores for all observed scores.
+#' @export
+#' @seealso \code{\link{get.rscreenorm}} which yields core sets and quantile-normalizes data at
+#' once, code{\link{get.qnorm}} which quantile-normalizes data for a given core set and
+#' \code{\link{get.all.qnorm}} to compute the quantile normalized scores.
+#'
+
+mypred.lm <- function(my_fit, newdata, mymin_pm, mymax_pm){
+  mycoef <- summary(my_fit)$coef[,1]
+  mypred <- rep(0,length(newdata))
+  mypred[is.na(newdata)] <- NA
+  sel_mid <- (newdata <= mymax_pm) & (newdata >= mymin_pm) & (!is.na(newdata)) # regression used for normalization
+  mypred[ sel_mid ] <-  mycoef[1] + mycoef[2]*newdata[ sel_mid ]
+  sel_low <- (newdata <= mymin_pm) & (!is.na(newdata)) # regression from lowest point, 45 degrees
+  mypred[ sel_low ] <-  mycoef[1] + (mycoef[2]-1)*mymin_pm + newdata[ sel_low ]
+  sel_up <- (newdata >= mymax_pm) & (!is.na(newdata)) # regression from highest point, 45 degrees
+  mypred[ sel_up ] <-  mycoef[1] + (mycoef[2]-1)*mymax_pm  + newdata[ sel_up ]
+  mypred
+}
+
+
+
+#' Computes normalized data for all observed scores
+#'
+#' This is an internal function that yields normalized lethality scores
+#' by fitting a regression between the
+#' original and the normalized percentiles for core set scores. It is
+#' called by both \code{\link{get.rscreenorm}} and \code{\link{get.qnorm}}, and is to be used
+#' internally.
+#' @aliases getallqnorm
+#' @concept scores screen siRNA CRISPR CRISPR-Cas9 crispr-cas9 CRISPR/Cas9 crispr/cas9 quantile normalization
+#'
+#' @param data_perc the percentiles of the per-replicate scores for the replicate-specific
+#' invariannt sets, as yielded by  \code{\link{get.perc}}.
+#' @param data_perc_qn the quantile-normalized percentiles of the per-replicate data, as yielded by
+#' \code{\link{get.perc.qnorm}}.
+#' @inheritParams get.rscreenorm
+
+#' @return a matrix with the same dimensions as the 'data_only' slot of \code{data_rscreen}, containing the
+#' quantile-normalized scores.
+#' @export
+#' @seealso \code{\link{get.rscreenorm}} which yields core sets and quantile-normalizes data at
+#' once, code{\link{get.qnorm}} which quantile-normalizes data for a given core set,
+#' \code{\link{get.perc}} to compute percentiles for the core set per replicate, \code{\link{get.inv.set}} for
+#' obtaining core sets for all replicates in the dataset and
+#' \code{\link{get.perc.qnorm}} to compute the quantile-normalized percentiles.
+#'
+
+
+get.all.qnorm <- function(data_rscreen, data_perc, data_perc_qn){
+  data_only <- data_rscreen[["data_only"]]
+  #  data_fit <- data_perc
+  fits_qn <- vector("list",ncol(data_only) )
+  names(fits_qn) <- colnames(data_only)
+  for(xi in 1:ncol(data_only) )
+  {
+    fits_qn[[xi]] <- lm(data_perc_qn[,xi] ~ data_perc[,xi])
+  #    data_fit[,xi] <- fitted(fits_qn[[xi]])  # Not sure this is needed, perhaps for graphs but uninteresting
+ }
+  min_perc <- apply(data_perc, 2, min, na.rm = T)
+  max_perc <- apply(data_perc, 2, max, na.rm = T)
+  data_qn <- data_only
+  for(xi in 1:ncol(data_only))
+  {
+    data_qn[,xi] <- mypred.lm( my_fit = fits_qn[[xi]], newdata = data_only[,xi] , min_perc[xi], max_perc[xi] )
+  }
+  data_qn
+}
+
+

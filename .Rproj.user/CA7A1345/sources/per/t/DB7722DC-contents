@@ -1,0 +1,1017 @@
+---
+title: "Rscreenorm TKO data"
+author: "Renee X. de Menezes"
+date: "February 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=F }
+knitr::opts_chunk$set(echo = F, message=FALSE, warnings=FALSE)
+# knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, width = 110)
+```
+
+```{r, echo=F}
+# This is what is done in 
+# main_analysis_lm_lethal_tko2.R, where isqn is used with only the positive controls
+# that are consistently lethal across cell lines
+```
+
+```{r, echo=F}
+mynam <- "/media/renee/Seagate Expansion Drive/"
+mydir.old <- paste(mynam,"Projects/bachas costa/checks data lethal 201601",sep="")
+mydir <- paste(mydir.old,"/tko",sep="")
+mydir.scripts <- paste(mydir,"/scripts",sep="")
+mydir.output <- paste(mydir,"/output",sep="")
+mydir.data <- paste(mydir,"/data",sep="")
+setwd(mydir.scripts)
+source(paste(mynam,"Projects/mysplit.R",sep="" ))
+source(paste(mynam,"Projects/functions_wilcoxon_t_logistic_fdr.R",sep="" ))
+source(paste(mynam,"Projects/var_in_colour.R",sep="" ))
+```
+
+# The data
+
+The data used here was first published in the paper by Hart et al. (Mol Sys Biol, 2014) and can be obtained from 
+
+http://tko.ccbr.utoronto.ca/
+
+as the base library data, or by selecting the lib1-base file per cell line.
+
+Essentially the data involves CRISPR-Cas9 data for 6 different cell lines, each with one library for $T=0$ and at least one replicate for later time points. Each cell line was observed at a minimum of 3 time points after $T=0$.
+
+```{r}
+# source("read_data.R")
+all.files <- dir(mydir.data)
+all.files <- all.files[grep("readcount",all.files)]
+all.files <- all.files[ -grep(".gz",all.files)]
+mysample <- sapply(1:length(all.files),mysplit,char.vector=all.files,split.by="-",result.sel=2)
+all.data <- NULL
+for(xi in 1:length(all.files))
+{
+  mydata <- read.delim(paste(mydir.data,"/",all.files[xi],sep=""))
+  if(xi > 1) colnames(mydata)[3:ncol(mydata)] <- paste( rep(mysample[xi],ncol(mydata)-2) , colnames(mydata)[3:ncol(mydata)] )
+  if(xi>1) { all.data <- data.frame(all.data,mydata[,-(1:2)]) } else {
+             all.data <- mydata
+  }
+}
+gene <- as.character(all.data$GENE)
+gseq.gene <- as.character(all.data$GENE_CLONE)
+gseq <- sapply(1:length(gseq.gene),mysplit,char.vector=gseq.gene,split.by="_",result.sel=2)
+data.all <- data.frame(gseq=gseq,gene=gene,all.data[,-(1:2)])
+data.all <- data.all[ order(data.all$gseq), ]
+# source("read_data_ann.R")
+data.ann.all <- read.delim(paste(mydir.data,"/annotation_mmc2.txt",sep=""),stringsAsFactors=FALSE)
+tab.target <- table(data.ann.all$Target)
+cont.names <- names(tab.target[tab.target>10])
+```
+
+### Different gRNA types
+
+First we check which gRNAs are contained in the library, at a frequency larger than 10. These gRNAs correspond to controls.
+
+```{r}
+# OK, so per sample we have the following controls:
+tab.target[names(tab.target) %in% cont.names]
+#chr10Promiscuous        chr10Rand             EGFP             LacZ       luciferase 
+#             796              584               22               96               24 
+# Total neg cont: 22+96+24 = 142
+# Total random control: 584
+# Total pos cont: 796
+```
+
+Here the gRNAs labelles `r cont.names[1]` are meant to be positive controls, whilst controls 
+`r cont.names[3:5]` should work as negative controls. We label those as such and subsequently 
+tabulate how many there are, obtaining the table below.
+
+```{r}
+wellType <- rep("sample",nrow(data.ann.all))
+wellType[data.ann.all$Target %in% cont.names[3:5]] <- "neg"
+wellType[data.ann.all$Target == "chr10Rand"] <- "random"
+wellType[data.ann.all$Target == "chr10Promiscuous"] <- "pos"
+table(wellType)
+```
+
+
+```{r}
+data.ann <- data.frame(gseq=data.ann.all$gRNA.Sequence, target=data.ann.all$Target, wellType, targetLocus=data.ann.all$Target.Locus, stringsAsFactors=FALSE)
+```
+
+### Screening time points
+
+
+```{r}
+#source("make_pdata.R")
+# extract sample column labels of the data file, and make a pdata with sample id and the remainder of the sample label
+all.sample.names <- colnames(data.all)[-(1:2)]
+sample.ids <- sapply(1:length(all.sample.names),mysplit,char.vector=all.sample.names,split.by="[.]",result.sel = 1)
+time <- sapply(1:length(all.sample.names),mysplit,char.vector=all.sample.names,split.by="[.]",result.sel = 2)
+# This didn't work as it should have for the first 4 entries - so we fix those
+time[1:4] <- c(paste("R",1:3,sep=""),"T0")
+sample.ids[1:4] <- rep("DLD",4)
+# time did not work for entires 12:23, so we fix this too
+t12.22 <- time[12:22]
+t1 <- sapply(1:length(t12.22),mysplit,char.vector=t12.22,split.by="_",result.sel=2)
+t2 <- sapply(1:length(t12.22),mysplit,char.vector=t12.22,split.by="_",result.sel=3)
+t2[length(t2)] <- ""
+time[12:22] <- paste(t1,t2,sep="")
+# Time includes the actual time label as well as a letter, possibly referring to a replicate
+pdata <- data.frame(names=all.sample.names,ids=sample.ids,treat=time)
+
+f.cl <- factor(pdata$ids)
+```
+
+The number of observations per cell line is as follows:
+
+```{r}
+table(pdata$ids)
+```
+
+The specific time point at which cell lines were screened varied per cell line. We transform these into consecutive integers (1, 2, etc) since they are likely to represent to cell line doubling times, so in an analysis considering the cell lines together they should be considered as a multiple of the doubling time, rather than as the time point in hours. Here we define as 'ind.t2' the time point in hours as given in the data, and 'ind.t' as the variable containing the consecutive integers. To make this clearer, here is a cross-table of the two variables:
+
+```{r}
+# Defining time variables for graphs
+ind.t <- c(1:3,rep(0,2),rep(1:3,each=2),rep(1:5,each=2),0,rep(1:4,each=3),
+           0,rep(1:4,each=3),0,0,rep(1:4,each=2))
+ind.t2 <- c(1:3,rep(0,2),rep(c(5,13,21),each=2),rep(c(6,9,12,15,18),each=2),0,
+            rep(c(8,12,15,18),each=3),0,rep(c(8,12,15,18),each=3),0,
+            0,rep(c(9,12,15,18),each=2))
+table(ind.t, ind.t2)
+#ind.t0 <- c(1:3,rep(1,2),rep(0,16),1,rep(0,12),1,rep(0,12),1,1,rep(0,8))
+#pdata$ind.t <- ind.t
+```
+
+Now it is easier to also display an overview of cell lines and time points, as doubling times, at which they were screened:
+
+```{r}
+table(ind.t, pdata$ids)
+```
+
+### The screen data
+
+```{r}
+# Compute number of zeros per row and eliminate rows with
+# all entries equal to zero
+# This result is used later, but we need the data now for the heatmap
+#source("export_data_read.R") # objects data.ann, data.only, pdata 
+total.0.pr <- rowSums( (data.all[,-(1:2)]) == 0 ) # per row
+data.all <- data.all[ total.0.pr<57, ]
+data.ann <- data.ann[ total.0.pr<57, ]
+# Put all annotation in ann file, preserve data object with only data columns, having as rownames the sequences
+data.ann$gene <- factor(as.character(data.all$gene))
+data.only <- as.matrix(data.all[ , -(1:2)])
+rownames(data.only) <- data.all$gseq
+```
+
+First we look at the (nonparametric) correlation structure between the screen data for different samples via a heatmap.
+
+```{r heatmap.speaman.raw.all, fig.height=8, fig.width=10}
+library(gplots)
+mydata <- asinh(data.only) # data matrix with columns to use
+mycor <- cor(mydata, method="spearman")
+is.t0 <- c(rep(0,3),rep(1,2),rep(0,16),1,rep(0,12),1,rep(0,12),rep(1,2),rep(0,8))
+pdata$is.t0 <- is.t0
+myvar1 <- var.in.colour(pdata$ids)
+myvar2 <- var.in.colour(pdata$is.t0)
+heatmap.2(mycor,col="bluered",symm=TRUE,trace="none",ColSideColors=myvar1[[1]],RowSideColors=myvar2[[1]],
+          margins=c(7,7),cexRow=.7,cexCol=.7,main="Spearman cor, all gRNAs")
+legend("topright", legend=myvar1[[3]], fill=myvar1[[2]], cex=.6)
+legend("topleft", legend=c("T>0","T=0"), fill=myvar2[[2]], cex=.6)
+```
+
+
+The data shows that screens corresponding to the same cell line typically display stronger correlation than with screens of other cell lines, even considering different time points later than $T=0$. The exceptions are the screens at $T=0$, which mostly cluster together regardless of the cell line. Note that the above correlations included all guide RNAs, and thus they may have been biased by the controls. We re-calculate them using only the library guide RNAs (see heatmap below).
+
+
+```{r heatmap.spearman.raw.library, fig.height=8, fig.width=10}
+myann <- data.ann # data annotation
+ann.var <- "wellType"
+mydata <- asinh(data.only) # data matrix with columns to use
+is.t0 <- c(rep(0,3),rep(1,2),rep(0,16),1,rep(0,12),1,rep(0,12),rep(1,2),rep(0,8))
+pdata$is.t0 <- is.t0
+myvar1 <- var.in.colour(pdata$ids)
+myvar2 <- var.in.colour(pdata$is.t0)
+mydata <- mydata[ myann[,ann.var] == "sample", ]
+mycor <- cor(mydata, method="spearman")
+heatmap.2(mycor,col="bluered",symm=TRUE,trace="none",ColSideColors=myvar1[[1]],RowSideColors=myvar2[[1]],
+          margins=c(7,7),cexRow=.7,cexCol=.7,main="Spearman cor, library gRNAs")
+legend("topright", legend=myvar1[[3]], fill=myvar1[[2]], cex=.6)
+legend("topleft", legend=c("T>0","T=0"), fill=myvar2[[2]], cex=.6)
+```
+
+This confirms our findings, that mostly samples for $T>0$ cluster together according to the cell line, although samples for $T=0$ cluster together regarless of the cell line. This suggests a technical, rather than biological, effect.
+
+Note that the screen data corresponds to sequencing data, which is on an exponential scale. In what follows we transform it using a hyperbolic-arc sine transformation (asinh) of it, which helps control the dependence of the variance upon the mean. In essence, this is a data transformation equivalent to the logarithm for middle to high counts, and equivalent to a linear transformation for low counts. It has the particular advantage of being able to handle zeros, which the logarithm cannot.
+
+
+### Number of zeros per gRNA and per sample
+
+
+Note that there are `r sum(total.0.pr==ncol(data.all)-2)` gRNAs that have measurement equal to zero everywhere. These are left out of the data, yielding a total of `r nrow(data.all)` data rows.
+
+We now evaluate how many zeros are observed per library. So we count how many gRNAs per sample have a 0 value, per sample. The total number of zeros are displayed as bars in the plot below.
+
+```{r, fig.width=10, fig.height=6}
+# Define object and variable containing annotation to be used (well type)
+myann <- data.ann # data annotation
+ann.var <- "wellType"
+use.cont <- c("neg","sample","pos","random") # wellTypes to be used
+#source("plots_zeroObs_forReport.R")
+col.cl <- c( "red", "orange", "purple", "darkgreen", "darkblue", "magenta" ) # ,"aquamarine"
+# We use col.cl in the same order as f.cl, which is not the order in which they appear in pdata
+names(col.cl) <- levels(f.cl)
+# only the first two differ in their order compared to the data matrix, so we change them for consistency
+# We now can select the colour according to the f.cl
+tab.cl <- table(f.cl)
+xu <- 1
+col.cl.vec <- rep(col.cl[xu],tab.cl[xu])
+for(xu in 2:length(col.cl)) col.cl.vec <- c(col.cl.vec, rep(col.cl[xu],tab.cl[xu]) )
+# Note that the data has many zeroes
+# First per sample
+total.0.ps <- colSums(data.only==0) # per sample
+total.0 <- data.frame(names=pdata$names,ids=pdata$ids,ind.t=ind.t,ind.t2=ind.t2,n0=total.0.ps,col=col.cl.vec)
+total.0 <- total.0[ order(total.0$ids,total.0$ind.t), ]
+#par(las=2,mar=c(7,4,4,1))
+#barplot(total.0$n0,col=as.character(total.0$col),names.arg=total.0$names,cex.names=.5,main="Number of observations equal to 0 per sample")
+par(las=2,mar=c(7,6,2,1))
+barplot(total.0$n0,col=as.character(total.0$col),names.arg=total.0$ind.t2,cex.names=.5,
+        ylab="Number observations equal to 0 per sample",xlab="time point")
+legend("topright",legend=names(col.cl),fill=col.cl)
+```
+
+From this figure, it is clear that the number of zeros is related to the time point. This was expected, as more lethality ensues from a larger fraction of gRNAs with time.
+
+### Shift between $T=0$ and later time points
+
+We now examine the densities of the asinh counts per replicate, separately per cell line, while considering library gRNAs, negative and positive controls separately (see graphs below).
+
+```{r, fig.width=10, fig.height=6}
+mydata <- asinh(data.only) # data matrix with columns to use
+mytrans <- "asinh"
+uvar <- "values"
+newname <- ""
+ann.var <- "wellType"
+myann <- data.ann # data.ann.oldPos if this is done later, after new pos controls are defined
+par(mfrow=c(2,3),mar=c(4,3,1,1))
+source("prepare_density_plots.R")
+# The following 6 lines are the same as in plot_densities_oneExpPerPage.R
+col.types <- c("blue","black","red") # In this order: siCon, sample siRNA, pos control
+for(xi in levels(f.cl))
+{ 
+source("select_densities.R")
+source("select_densities_t0.R")
+mymain <- NULL
+myleg <- TRUE
+mytext <- mypd$ids[1]
+myxlim <- c(-2, 12)
+source("add_density_plot_letdx.R")
+source("add_density_t0.R")
+legend("topright",legend=c("gRNA","neg","pos","T=0"),lty=c("solid","dotted","dotted","dashed"),lwd=c(2,1,1,2),
+                  col=c(col.cl[levels(f.cl)==xi],col.types[1],col.types[3],"gray"),cex=.7)
+}
+```
+
+
+A common characteristic in all these graphs (above) is that the density for $T=0$ displays a shift to the right compared with densities for later time points, for each cell line. This is the case for library gRNAs as well as controls. In order to better illustrate this, we select a single cell line, RPE1, and plot densities of transformed counts for its replicates, separately for library gRNAs, negative and positive controls (see below, left graph). There we can see that the library gRNAs at $T=0$ (with dashed light gray line added) are right-shifted compared with the ones for later time points. The densities for controls, displayed as dotted lines, are reproduced also on the graph on the right, where we can see clearly that the same shift at $T=0$ is observed.
+
+
+```{r, fig.width=8, fig.height=4}
+mydata <- asinh(data.only) # data matrix with columns to use
+mytrans <- "asinh"
+uvar <- "values"
+newname <- ""
+myann <- data.ann # data.ann.oldPos if this is done later, after new pos controls are defined
+par(mfrow=c(1,2),mar=c(4,3,1,1))
+source("prepare_density_plots.R")
+# The following 6 lines are the same as in plot_densities_oneExpPerPage.R
+col.types <- c("blue","black","red") # In this order: siCon, sample siRNA, pos control
+xi <- levels(f.cl)[6] 
+source("select_densities.R")
+source("select_densities_t0.R")
+mymain <- NULL
+myleg <- TRUE
+mytext <- mypd$ids[1]
+source("add_density_plot_letdx.R")
+source("add_density_t0.R")
+legend("topright",legend=c("gRNA","neg","pos","T=0"),lty=c("solid","dotted","dotted","dashed"),lwd=c(2,1,1,2),
+                  col=c(col.cl[levels(f.cl)==xi],col.types[1],col.types[3],"gray"),cex=.7)
+# Now plotting the controls density only
+myleg <- FALSE
+source("add_density_plot_letdx_controlsOnly.R")
+source("add_density_t0_controls.R")
+```
+
+
+As the $T=0$ shift is common to all cell lines and all gRNAs, it is likely to be of a technical nature.
+
+
+### Positive controls
+
+The behaviour of positive controls is rather unusual, as we illustrate with the figure below.
+
+```{r, fig.width=10, fig.height=5}
+mydata <- asinh(data.only) # data matrix with columns to use
+mytrans <- "asinh"
+uvar <- "values"
+newname <- ""
+# Trying to understand what the positive controls really are
+library(gplots)
+#source("study_posControls.R")
+source("prepare_density_plots.R")
+par(mfrow=c(2,3),mar=c(4,4,1,1))
+for(xi in levels(f.cl)) 
+{
+  source("select_densities.R")
+  myltype <- rep("solid",nrow(mypd))
+  myltype[mypd$is.t0==1] <- "dotted"
+  mycl <- as.character(mypd$ids[1])
+  myxlim <- c(min(let.p.x,na.rm=T),max(let.p.x,na.rm=T))
+  myylim <- c(0,max(let.p.y,na.rm=T))
+  plot(let.p.x[,mypd$ids==xi][,1],let.p.y[,mypd$ids==xi][,1],type="l",lty= myltype[1], col=col.cl[mycl],xlim=myxlim,ylim=myylim,main="",
+     xlab=paste(mytrans," values"),ylab="density")
+  if(ncol(let.p.x)>1){  
+    for(xj in 2:ncol(let.p.x)) lines(let.p.x[,mypd$ids==xi][,xj],let.p.y[,mypd$ids==xi][,xj],col=col.cl[mycl],lty= myltype[xj])
+   }
+  legend("topright",legend=c("T>0","T=0"),lty=c("solid","dotted"),col=col.cl,cex=.6)
+  text(myxlim[1]+(diff(myxlim)*.6), myylim[1]+(diff(myylim)*.9) , labels=paste(xi))
+}
+```
+
+These graphs illustrate various important issues. Firstly, the approximately 800 positive controls always display a bimodal distribution of values per screen/library. Secondly, their left-most mode is the highest for all screens observed at $T>0$, whilst for screens observed at $T=0$ the right-most mode is highest. It is also interesting to note that their distributions mostly overlap for any given cell line and $T>0$, but considerable variability is observed between cell lines. Here we should point out that these density plots were made using a kernel density estimator, which smoothes out rough edges such as the one near 0 - there are no observations below zero for any of the screens, but the graphs seem to suggest that there might be some.
+
+```{r}
+# source("study_posControls.R")
+pos.ann <- data.ann[data.ann$wellType=="pos",]
+```
+
+Based upon the bimodality of the positive control values, we decided to check if these controls could be grouped somehow. We checked their sequences to see if there was any similarity, but we found that `r sum(duplicated(pos.ann$gseq))` sequences were repeated or, in other words, all sequences corresponding to the positive controls are unique.
+
+We also evaluated the correlations between only positive controls of each screen (see graph below). Here we can see that positive control values are still more similar between replicates of the same cell line, than between replicates of different cell lines, but the diferences are smaller.
+
+```{r, fig.width=10, fig.height=8}
+mycor <- cor(mydata[data.ann$wellType=="pos" , ],method="pearson")
+heatmap.2(mycor,col="bluered",symm=TRUE,trace="none",ColSideColors=myvar1[[1]],RowSideColors=myvar2[[1]],
+          margins=c(6.5,6.5),cexRow=.7,cexCol=.7,main="Using positive controls only")
+legend("topright",legend=myvar1[[3]],fill=myvar1[[2]],cex=.6)
+legend("topleft",legend=c("T>0","T=0"),fill=myvar2[[2]],cex=.6)
+```
+
+So, positive controls are related to phenotype (illustrated by their association with time) and, less strongly, to the cell line. 
+
+The fact remains that some positive controls do not consistently yield a lethal phenotype. On the basis of their bimodality, we decided to check if there were controls that took values in the lower part of the distribution consistently across replicates. For this, we used a threshold equal to 2 to define the lower part of densities of screens observed at any time $T>0$ and, for screens at $T=0$, a threshold of 4, where these thresholds are on the hypoerbolic-arc sine scale. 
+
+An evaluation of how many times each one of the 788 controls was below the threshold yields an interesting picture (see below). More than 120 of the individual positive controls are consistenly in the upper part of the distribution and, as such, always is not lethal. It is also clear that an important fraction of all controls yields consistently (for 50 or more samples) values under the lower part of the distribution. 
+
+```{r, fig.height=5, fig.width=8}
+data.pcont <- data.ileth <- mydata[data.ann$wellType=="pos" , ]
+for(xj in 1:ncol(mydata))
+{
+  if( pdata$is.t0[xj] == 0 ) { data.ileth[,xj] <- data.pcont[,xj] <= 2 
+  } else {
+    data.ileth[,xj] <- data.pcont[,xj] <= 4            
+  } 
+}
+# data.ileth is a matrix for all positive controls and all samples, indicating
+# whether or not each observation is below its threshold (T) or not (FALSE)
+par(las=2, mfrow=c(1,1))
+barplot(table(rowSums(data.ileth)),xlab="number of samples under threshold",ylab="number of positive controls",
+        col=rainbow(n=ncol(mydata+2),start=0.1,end=0.9),main="",cex.names=.7)
+```
+
+Indeed, we found a total of `r sum(rowSums(data.ileth)>=50)` positive controls taking values in the lower part of the curve for 50 or more replicates. From the viewpoint of these controls, there is still a separation of replicates observed at $T=0$, but cell lines are also better discriminated (see heatmap below where the gRNAs are displayed as rows and samples are displayed as columns).
+
+```{r, fig.width=10,fig.height=8}
+myvar1 <- var.in.colour(pdata$ids)
+myvar2 <- var.in.colour(pdata$is.t0)
+heatmap.2(data.pcont[ rowSums(data.ileth) >= 50, ],col="bluered", trace="none",labRow="",
+          ColSideColors=myvar1[[1]],cexCol=.7,
+          margins=c(7,4),main="Positive controls below threshold >=50 samples")
+legend("topright",legend=myvar1[[3]],fill=myvar1[[2]],cex=.6)
+```
+
+From now on, we disregard the remaining positive controls, focusing on these `r sum(rowSums(data.ileth)>=50)` positive controls that yield consistently a lethal phenotype.
+
+
+
+```{r}
+#
+#source("make_new_posControls.R")
+data.ann2 <- data.ann
+data.ann2$wellTypeOld <- data.ann2$wellType
+mywt <- as.character(data.ann2$wellType)
+mywt[ (data.ann2$wellType=="pos") ][ rowSums(data.ileth)<50 ] <- "other"
+data.ann2$wellType <- mywt
+data.ann.oldPos <- data.ann
+data.ann <- data.ann2
+myann <- data.ann
+write.table(data.ann, file=paste(mydir.output,"/data_tko_ann_allgRNAs_newPosCont224.txt", sep=""), sep="\t")
+save(data.ann, file=paste(mydir.output,"/data_tko_ann_allgRNAs_newPosCont224.RData", sep=""))
+```
+
+### Shift between $T=0$ and later time points
+
+We now re-examine the densities of counts, re-scaled using asinh. Per cell line, we make one graph of the densities of library gRNAs, negative and positive controls, per replicate.
+
+```{r, fig.width=10, fig.height=6}
+#source("all_plots_perTransformation.R") 
+use.cont <- c("sample","neg","pos") # wellTypes to be used
+myname <- paste("raw",mytrans,"Data_sampleAndControls_",newname,sep="")
+source("prepare_density_plots.R")
+#source("plot_densities_allExpsSinglePage.R")
+col.types <- c("blue","black","red") # In this order: siCon, sample siRNA, pos control
+### Plot of sample siRNAs, pos and neg control densities, but all in a single page
+par(mfrow=c(2,3),mar=c(4,4,1,1))
+for(xi in levels(f.cl)) 
+{
+  source("select_densities.R") 
+  mymain <- ""
+  myleg <- FALSE
+  source("add_density_plot_letdx.R")
+  # source("add_extras.R")
+  text(myxlim[1]+0.5*diff(range(myxlim)),myylim[1]+0.95*diff(range(myylim)),
+  paste( as.character(mypd$ids)[1]), pos=2,col="blue",cex=.7)
+}
+```
+
+While we see that positive controls now more clearly take values in the lethal phenotype range (around 0), except for perhaps a fraction of them that do not (yet) do so at $T=0$, we still see the shift between counts observed at $T=0$ and $T>0$. As we pointed out before, this shift is likely to be of a technical nature, as it affects all measurements. Indeed, the functional range for replicates at $T=0$ is narrower, and involves larger counts, compared with that for replicates at $T>0$. Since the data needs to be interpreted in the context of the functional range relative to the measured negative and positive controls, rather than the observed values irrespective of controls, this is relevant. We will handle this in the next section.
+
+# Pre-processing
+
+### Lethality scores
+
+First we compute lethality scores, defined as
+
+$$
+\frac{\mbox{gRNA} - \mbox{median negative controls}}{\mbox{median positive controls} - 
+\mbox{median negative controls}}
+$$
+where the screen counts have typically been transformed - here we use the hyperbolic-arc sine. These scores have the negative controls centered around zero and the positive controls around 1, whilst the library gRNAs vary within this range consistently across replicates and cell lines (see figure below). These scores make the data from different replicates more comparable, as gRNAs for each library now vary within the same functional range. In particular, they fix the shift observed for counts at $T=0$ observed for all cell lines.
+
+```{r, fig.width=10, fig.height=6}
+# Compute leth score
+norm.data <- asinh(data.only)
+mat.sample <- norm.data[myann[,ann.var]==use.cont[1], ]
+mat.pos <- norm.data[ myann[,ann.var]==use.cont[3], ]
+mat.neg <- norm.data[ myann[,ann.var]==use.cont[2], ]
+#source("compute_stdLethScores_allWellTypes.R")mat.let <- mat.sample # matrix of lethal scores - in Costa's script this was both mat.lets and mat.lethals, and I now use a single object for clarity
+mat.let <- mat.sample # matrix of lethal scores - in Costa's script this was both mat.lets and mat.lethals, and I now use a single object for clarity
+let.pos <- let.sic <- vector("list", ncol(mat.sample)) # lists of lethality scores
+names(let.pos) <- names(let.sic) <- colnames(mat.sample)
+
+for(xj in 1:ncol(mat.sample)) 
+{ 
+  median.pos <- median( mat.pos[,xj] )
+  mat.let[,xj] <-  (mat.sample[,xj] - median(mat.neg[,xj]))/(median( mat.pos[,xj] ) - median(mat.neg[,xj])) 
+  let.pos[[xj]] <- (mat.pos[,xj]    - median(mat.neg[,xj]))/(median( mat.pos[,xj] ) - median(mat.neg[,xj]))
+  let.sic[[xj]] <- (mat.neg[,xj]    - median(mat.neg[,xj]))/(median( mat.pos[,xj] ) - median(mat.neg[,xj]))
+}
+
+rownames(mat.let) <- rownames(mat.sample)
+#
+mytrans <- "asinh"
+uvar <- "lethality scores"
+newname <- ""
+#source("compare_lethality_scores_plots_1page_forReport.R")
+source("prepare_density_plots_let.R")
+myxlim <- c( min( d.let.x), max( d.let.x )  )
+myxlimcont <- c( min( d.let.x, min(d.letpos.x), min(d.letsic.x) ), max( d.let.x, max(d.letpos.x), max(d.letsic.x) )  )
+# Now making graphs including std leth scores for pos and sicons
+col.types <- c("blue","black","red") # In this order: siCon, sample siRNA, pos control
+par(mfrow=c(2,3),mar=c(4,4,1,1))
+for(xi in levels(f.cl)) 
+{
+  source("select_densities_let.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  myleg <- FALSE
+  mymain <- ""
+  source("add_density_plot_letdx.R")
+  text(myxlim[1]+0.2*diff(range(myxlim)),myylim[1]+0.95*diff(range(myylim)),
+       paste(mypd$ids[1]), pos=2,col="blue",cex=.7)
+}
+```
+
+However, distributions still differ between cell lines, and for HCT116_1, between replicates of the same cell line. The differences in data variability are undesirable, as heavier tails may be taken as more effect, whereas these are likely to be due to experimental (technical) variation. This is confirmed by the fact that only some replicates exhibit increased spread. In order to correct form this, we need an extra normalization step, described below.
+
+### Invariant set of scores
+
+We now define a set of scores that represents the core of the lethality scores' distribution for each replicate. This set is here defined as score values nearer to negative than to positive controls. The sets are represented below as dashed gray lines.
+
+```{r, fig.height=6, fig.width=10}
+mygamma <- 1 # previously we used gamma=1, yielding a cut-off "halfway" between the controls
+#source("checks_MAD_IQR_newCont.R") # now need to use sd instead of iqr or mad - this is skipped here as it is not necessary to repeat it
+#source("classify_siRNAs_asLethal_newPosCont.R")
+mat.par.pos <- mat.par.sic <- matrix(0,nrow=2,ncol=ncol(mat.let))
+rownames(mat.par.pos) <- rownames(mat.par.sic) <- c("median","sd")
+colnames(mat.par.pos) <- colnames(mat.par.sic) <- colnames(mat.let)
+
+mat.par.sic[1,] <- unlist( lapply( let.sic, median, na.rm=T ) )
+mat.par.sic[2,] <- unlist( lapply( let.sic, sd, na.rm=T ) )
+mat.par.pos[1,] <- unlist( lapply( let.pos, median, na.rm=T ) )
+mat.par.pos[2,] <- unlist( lapply( let.pos, sd, na.rm=T ) )
+
+# Now compute standardized distances, per sample and per siRNA
+dist.sic <- dist.pos <- mat.leth <- mat.leth.sd <- matrix(0,nrow=nrow(mat.let),ncol=ncol(mat.let))
+rownames(dist.sic) <- rownames(dist.pos) <- rownames(mat.leth) <- rownames(mat.leth.sd) <- rownames(mat.let)
+colnames(dist.sic) <- colnames(dist.pos) <- colnames(mat.leth) <- colnames(mat.leth.sd) <- colnames(mat.let)
+for(xi in 1:ncol(mat.let))
+{
+  dist.sic[,xi] <- (mat.let[,xi]-mat.par.sic[1,xi])/(mat.par.sic[2,xi]) # std distance from siCon (computed using lethality scores)
+  dist.pos[,xi] <- -(mat.let[,xi]-mat.par.pos[1,xi])/(mat.par.pos[2,xi]) # std distance from pos cont (computed using lethality scores)
+  mat.leth.sd[,xi] <- as.numeric( mygamma*dist.pos[,xi] < dist.sic[,xi]  ) # indicator of lethal siRNAs per replicate, using std distance
+  mat.leth[,xi] <- as.numeric( dist.pos[,xi] < dist.sic[,xi]  )  # indicator of lethal siRNA, using distance
+}
+mydata <- mat.let # data matrix with columns to use
+mytrans <- "asinh"
+uvar <- "lethality scores"
+newname <- ""
+#source("density_plots_nonLethal_siRNAs_forReport.R")
+source("prepare_density_plots_let.R")
+
+myxlim <- c( min( d.let.x), max( d.let.x )  )
+myxlimcont <- c( min( d.let.x, min(d.letpos.x), min(d.letsic.x) ), max( d.let.x, max(d.letpos.x), max(d.letsic.x) )  )
+# Use mat.leth.sd, which is a matrix of indicators of lethality (1 = lethal) - see "classify_siRNAs_asLethal.R")
+
+par(mfrow=c(2,3),mar=c(4,4,1,1)) 
+# Now making graphs including std leth scores for pos and sicons
+col.types <- c("blue","black","red") # In this order: siCon, sample siRNA, pos control
+par(mfrow=c(2,3),mar=c(4,4,1,1))
+for(xi in levels(f.cl)) 
+{
+  source("select_densities_let.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  mymain <- ""
+  myleg <- TRUE
+  source("add_density_plot_letdx.R")
+  text(myxlim[1]+0.3*diff(range(myxlim)),myylim[1]+0.95*diff(range(myylim)),
+       paste( as.character(mypd$ids)[1]), pos=2,col="blue",cex=.7)
+  legend("topright",legend=c("gRNA","neg","pos","InvSet"),lty=c("solid","dotted","dotted","dashed"),lwd=c(2,1,1,2),
+         col=c(col.cl[levels(f.cl)==xi],col.types[1],col.types[3],"gray24"),cex=.7)
+    source("add_nonLethal.R")
+  # source("add_extra_points.R")
+}
+```
+
+
+### Quantile normalization using the invariant sets
+
+We now make all distributions comparable by quantile-normalizing them on the basis of their invariant sets. This ensures that no over-correction will be done on the tails of the distributions, where phenotypic differences lie. It is a particularly important step when analysing multiple cell lines, which can exhibit different fractions of lethal hits.
+
+
+```{r, fig.width=10, fig.height=6}
+# Here using the piecewise linear
+newname <- "piecewiseLinear" # PWL
+source("get_normquant_piecewise_linear.R")
+mydata <- data.qn
+mytrans <- "qn"
+uvar <- "lethality scores"
+source("prepare_density_plots_qn.R")
+#source("plot_densities_allExpsSinglePage_qn_forReport.R")
+myxlim <- c( min( d.sir.x), max( d.sir.x )  )
+myxlimcont <- c( min( d.sir.x, min(d.pos.x), min(d.sicon.x) ), max( d.sir.x, max(d.pos.x), max(d.sicon.x) )  )
+# Use mat.leth.sd, which is a matrix of indicators of lethality (1 = lethal) - see "classify_siRNAs_asLethal.R")
+# Now making graphs including std leth scores for pos and sicons
+
+par(mfrow=c(2,3),mar=c(4,4,1,1))
+for(xi in levels(f.cl)) 
+{
+  source("select_densities.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+#  myxlim <- c(-1,2)
+  mymain <- ""
+  myleg <- TRUE
+  source("add_density_plot_letdx.R")
+#  source("add_extra_points_qn.R")
+  text(myxlim[1]+0.5*diff(range(myxlim)),myylim[1]+0.95*diff(range(myylim)),
+       paste(as.character(mypd$ids)[1]), pos=2,col="blue",cex=.7)
+#  source("add_nonLethal_qn.R")
+#  legend("topright",legend=c("gRNA","neg","pos","InvSet"),lty=c("solid","dotted","dotted","dashed"),lwd=c(2,1,1,2),
+#         col=c(col.cl[levels(f.cl)==xi],col.types[1],col.types[3],"gray24"),cex=.7)
+  legend("topright",legend=c("gRNA","neg","pos"),lty=c("solid","dotted","dotted"),lwd=c(2,1,1),
+         col=c(col.cl[levels(f.cl)==xi],col.types[1],col.types[3]),cex=.7)
+}
+```
+
+Data distributions are now undoubtly much more comparable. To make this even clearer, we plot densities of only library gRNAs, for all replicates, considering lethality scores (left) and quantile-normalized scores (right). Here it is clear that differences in data distribution, mostly due to spread, still exist after computing lethality scores. These differences correspond to changes between $T=0$ and $T>0$ replicates, with those corresponding to $T=0$ displaying generally a wider spread. If comparisons would then be made between $T=0$ and $T>0$ replicates using the un-normalized lethality scores, it is likely that a large number of hits would have been found due to this wider variability, as tails would seem consistently heavier for $T=0$. After quantile normalization, the correct hits, on the distribution tails seen as spikes are more likely to be the only ones detected.
+
+
+```{r, fig.width=10, height=3}
+#source("plot_densities_qn_onlySampleSiRNAs_forReport.R")
+mydata <- mat.let
+source("prepare_densities_samples.R")
+
+# Starting plots
+par(mfrow=c(1,2),mar=c(4,3,1,.5))
+# Restrict xlim,ylim to make it more comparable with plot for normalized leth scores
+
+myxlim <- c( -1.5, 1.5  )
+xi <- levels(f.cl)[1]
+source("select_densities_sample.R")
+myylim <- c( min( d.sir.y ), 4  )
+xj <- 1
+plot(let.d.x[,xj],let.d.y[,xj],type="l",col=col.cl[levels(f.cl)==xi],xlim=myxlim,ylim=myylim,#main=paste("Cell line",mypd$cl.names[1],", ",mypd$researcher[1]),
+     xlab=paste(uvar),ylab="")
+for(xj in 2:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+
+for(xi in levels(f.cl)[-1]) 
+{
+  source("select_densities_sample.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  for(xj in 1:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+}
+legend("topright",legend=names(col.cl),lty="solid",col=col.cl)
+
+## To make plots of qn-leth scores - prepare densities, siRNAs sample only
+mydata <- data.qn
+source("prepare_densities_samples.R")
+
+## Now starting plots
+# With restricted xlim to make the distributions more visible
+myxlim <- c( -1.5, 1.5  )
+xi <- levels(f.cl)[1]
+source("select_densities_sample.R")
+myylim <- c(0,3)
+xj <- 1
+plot(let.d.x[,xj],let.d.y[,xj],type="l",col=col.cl[levels(f.cl)==xi],xlim=myxlim,ylim=myylim,#main=paste("Cell line",mypd$cl.names[1],", ",mypd$researcher[1]),
+     xlab=paste(mytrans,uvar),ylab="")
+for(xj in 2:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+
+for(xi in levels(f.cl)[-1]) 
+{
+  source("select_densities_sample.R")  
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  for(xj in 1:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+}
+legend("topright",legend=names(col.cl),lty="solid",col=col.cl, cex=.7)
+
+```
+
+```{r}
+#source("make_newGraphs_manuscript.R") # 4-panel figure 5
+```
+
+### Correlation patterns unchanged
+
+Now we consider again the correlations between samples. We saw that screens for the same cell line cluster together for $T>0$, whilst samples for $T=0$ cluster mostly together, regardless of the cell line. Note that rscreenorm does not change the ranking of observations per sample and, as such, it does not change the Spearman correlations. So this comparison needs to be done using Pearson correlations based upon the library guide RNAs only. First for the un-normalized (but re-scaled) data.
+
+```{r heatmap.pearson.raw.library, fig.height=8, fig.width=10}
+myann <- data.ann # data annotation
+ann.var <- "wellType"
+mydata <- asinh(data.only) # data matrix with columns to use
+is.t0 <- c(rep(0,3),rep(1,2),rep(0,16),1,rep(0,12),1,rep(0,12),rep(1,2),rep(0,8))
+pdata$is.t0 <- is.t0
+myvar1 <- var.in.colour(pdata$ids)
+myvar2 <- var.in.colour(pdata$is.t0)
+mydata <- mydata[ myann[,ann.var] == "sample", ]
+mycor <- cor(mydata, method="pearson")
+heatmap.2(mycor,col="bluered",symm=TRUE,trace="none",ColSideColors=myvar1[[1]],RowSideColors=myvar2[[1]],
+          margins=c(7,7),cexRow=.7,cexCol=.7,main="Pearson cor, library gRNAs")
+legend("topright", legend=myvar1[[3]], fill=myvar1[[2]], cex=.6)
+legend("topleft", legend=c("T>0","T=0"), fill=myvar2[[2]], cex=.6)
+```
+
+
+Now the question is if rscreenorm changes this (see heatmap below).
+
+```{r heatmap.qn, fig.height=8, fig.width=10}
+mydata <- data.qn
+mytrans <- "qn"
+mycor <- cor(mydata, method="pearson")
+is.t0 <- c(rep(0,3),rep(1,2),rep(0,16),1,rep(0,12),1,rep(0,12),rep(1,2),rep(0,8))
+pdata$is.t0 <- is.t0
+myvar1 <- var.in.colour(pdata$ids)
+myvar2 <- var.in.colour(pdata$is.t0)
+heatmap.2(mycor,col="bluered",symm=TRUE,trace="none",ColSideColors=myvar1[[1]],RowSideColors=myvar2[[1]],
+          margins=c(7,7),cexRow=.7,cexCol=.7,main="Pearson cor, library gRNAs, rscreenorm")
+legend("topright", legend=myvar1[[3]], fill=myvar1[[2]], cex=.6)
+legend("topleft", legend=c("T>0","T=0"), fill=myvar2[[2]], cex=.6)
+```
+
+Our normalization does not change the correlation pattern that separates $T=0$ and $T>0$ screens. So although the functional ranges are made comparable (not the same, but screen values now represent the same phenotypes across screens), the $T=0$ effect is still stronger than the cell line effect. It is unclear if this is desirable or not.
+
+
+# Comparison with median-centering
+
+A recently proposed method to pre-process (and analyse) CRISPR-Cas9 data is MAGeCK (Li et al., 2014, *Gen Biol*). It involves centering the data per sample around its median, then treating the data as other RNA-sequencing data (i.e. estimating the variance using a hierarchical model and using a negative binomial model to test for differences between sample groups), the latter being similar to what edgeR does. This ignores the controls as reference values and, as such, does not normalize functional ranges between samples. 
+
+Indeed, we did this median-centering for the TKO data, and noticed that it yields somewhat similar densities for the re-scaled read counts as with rscreenorm, yet with noticeable differences. Firstly, the variation in read counts distributions between replicates of the HCT116_1 cell line was still present after median-centering (see densities in the middle graph below), indicating that more technical variability between replicates of this cell line remained in the data.
+In addition,  cell line RPE1 displayed values that are more extreme than the remaining ones, for all of its replicates (see densities in middle graph below). This feature was not present in the raw data (graph on the left-hand side), where it is clear that the extreme values overlap across cell lines and replicates, and rscreenorm scores also do not display this (graph on the right-hand side), with all peaks corresponding to lethal hits roughly overlapping in value between cell lines. Indeed, RPE1 replicates seemingly had slightly higher counts overall compared to other cell lines (represented by the left-shift of the densities in the left-hand side graph below) which, when corrected for without taking controls into account, shifts the lethal hits peak on the tail further away than for other cell lines. This means in particular that comparisons involving RPE1 based upon the median-centered data might over-estimate effects.
+
+
+```{r mageck}
+get.med <- apply(asinh(data.only)[ data.ann$wellType == "sample", ], 2, median) 
+data.cmed.s <- asinh(data.only) -  matrix(rep(get.med, each=nrow(data.only)), nrow=nrow(data.only), ncol=ncol(data.only))
+```
+
+```{r mageckPlotOld, fig.width=10, fig.height=4, eval=F}
+# Now densities with median-centering and qn-norm
+par(mfrow=c(1, 2),mar=c(4,3,1,1))
+source("plot_densities_medC_qn_onlySampleSiRNAs_forReport_noPDF.R")
+```
+
+
+We start by examining the raw (hyperbolic-arc sine) values, together with the median-centered ones and the rscreenorm scores. Here we can see that considerable variability present in the data is not corrected by simply centering the data around its median. In particular, replicates for HCT116_1 display as much variability between themselves in the median-centered data as in the raw data, a characteristic that is corrected after applying rscreenorm.
+
+```{r, fig.width=10, height=3}
+#source("plot_densities_qn_onlySampleSiRNAs_forReport.R")
+mydata <- -asinh(data.only[data.ann$wellType=="sample", ])
+uvar <- "-asinh values"
+source("prepare_densities_samples.R")
+
+# Starting plots
+par(mfrow=c(1,3),mar=c(4,3,1,.5))
+# Restrict xlim,ylim to make it more comparable with plot for normalized leth scores
+
+myxlim <- c( -10, 1.5  )
+xi <- levels(f.cl)[1]
+source("select_densities_sample.R")
+myylim <- c( min( d.sir.y ), max( d.sir.y )  )
+xj <- 1
+plot(let.d.x[,xj],let.d.y[,xj],type="l",col=col.cl[levels(f.cl)==xi],xlim=myxlim,ylim=myylim,#main=paste("Cell line",mypd$cl.names[1],", ",mypd$researcher[1]),
+     xlab=paste(uvar),ylab="")
+for(xj in 2:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+
+for(xi in levels(f.cl)[-1]) 
+{
+  source("select_densities_sample.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  for(xj in 1:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+}
+legend("topright",legend=names(col.cl),lty="solid",col=col.cl)
+
+## Now for median-centered data
+
+mydata <- -data.cmed.s[data.ann$wellType=="sample", ]
+uvar <- "-med-Cent values"
+source("prepare_densities_samples.R")
+
+myxlim <- c( -4, 7  )
+xi <- levels(f.cl)[1]
+source("select_densities_sample.R")
+myylim <- c( min( d.sir.y ), max( d.sir.y )  )
+xj <- 1
+plot(let.d.x[,xj],let.d.y[,xj],type="l",col=col.cl[levels(f.cl)==xi],xlim=myxlim,ylim=myylim,#main=paste("Cell line",mypd$cl.names[1],", ",mypd$researcher[1]),
+     xlab=paste(uvar),ylab="")
+for(xj in 2:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+
+for(xi in levels(f.cl)[-1]) 
+{
+  source("select_densities_sample.R")
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  for(xj in 1:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+}
+legend("topright",legend=names(col.cl),lty="solid",col=col.cl)
+
+
+## To make plots of qn-leth scores - prepare densities, siRNAs sample only
+mydata <- data.qn
+source("prepare_densities_samples.R")
+uvar <- "rscreenorm scores"
+## Now starting plots
+# With restricted xlim to make the distributions more visible
+myxlim <- c( -1.5, 1.5  )
+xi <- levels(f.cl)[1]
+source("select_densities_sample.R")
+myylim <- c(0,3)
+xj <- 1
+plot(let.d.x[,xj],let.d.y[,xj],type="l",col=col.cl[levels(f.cl)==xi],xlim=myxlim,ylim=myylim,#main=paste("Cell line",mypd$cl.names[1],", ",mypd$researcher[1]),
+     xlab=paste(uvar),ylab="")
+for(xj in 2:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+
+for(xi in levels(f.cl)[-1]) 
+{
+  source("select_densities_sample.R")  
+  myylim <- c( min( let.d.y ), max( let.d.y )  )
+  for(xj in 1:ncol(let.d.x))   lines(let.d.x[,xj],let.d.y[,xj],col=col.cl[levels(f.cl)==xi])
+}
+legend("topright",legend=names(col.cl),lty="solid",col=col.cl, cex=.7)
+
+```
+
+
+To check if this was indeed the case, we checked how many hits were found when comparing pairs of cell lines with each dataset, and evaluated the overlap of hit lists. Specifically, per cell line pair we fitted an empirical-Bayes regression model (using limma) to the data, including a cell line effect, a time effect (either $T=0$ or $T>0$) and an interaction between these. We extract p-values corresponding to both the cell line effect, corrected thus for time, as well as for the interaction, in each case. To declare hits, we set cut-offs of $0.01, 0.001, 0.0001$ for the uncorrected p-values. Since this regression model assumes that errors follow a normal distribution, we transformed the raw data using a hyperbolic arc-sine, then median-centered it. Rscreenorm scores were also  re-scaled using a hyperbolic arc sine.
+
+
+
+
+```{r compare.qn.mageck.allPairs.noT0, fig.width=8, fig.height=6, eval=FALSE}
+#To check if this was indeed the case, we checked how reproducible results were by using subsets of the data. Specifically, per cell line we split the screens into two subsets of approximately equal size, making sure time points were represented in both subsets (here screens observed for $T=0$ were left out as there was a single screen for each cell line, whilst screens for cell line DLD were left out because these had a single replicate per time point). Subsequently, we compared screens between each pair of cell lines using limma (the data has been re-scaled and its distribution allows for this), using either the rscreenorm or the median-centered data. We then computed Pearson correlations between the p-values obtained (using them on a -logarithmic scale to make correlations sensitive to changes of low p-values, rather than large ones). What we find is that, for most possible subsets,  rscreenorm yielded larger correlations between p-values than median-centering (see figure below)  for a majority of the 10 cell line pairs. Interestingly, the cases for which correlations were often lower with rscreenorm than with median-centering involved the RPE1 cell line in the pair. The graph below displays the correlations computed per cell line pair, for a single subset.
+
+
+
+#The particular number of pairs in which the correlation is larger with rscreenorm than with median-centering varies a little with the dataset. To get an overview, we re-compute the correlations for all possible subsets. We also use two p-value cut-offs, 0.01 and 0.05, and check how many p-values are below this threshold in both hit lists for the same pair. This is meant as an additional estimate of association between results that is less sensitive to extreme values in either direction.
+
+library(limma)
+coff <- c(0.01, 0.001, 0.0001) # coefficients to be used as cut-offs when checking for overlap between hit lists
+
+source("intro_reprod.R") # This depends on pdata only, so it is common for both datasets
+# The code chunk below comes from get_hits_overlap.R
+mydata <- data.qn # this already does not involve controls
+myann <- data.ann[data.ann[, "wellType"] == "sample", ]
+mydata2 <- mydata[, colnames(mydata) %in% as.character(pdata2$names)]
+source("compare_cellLines_allSamples.R")
+table.qn.all <- table.res
+
+mydata <- data.cmed.s # data matrix with columns to use, includes controls
+myann <- data.ann[data.ann[, "wellType"] == "sample", ]
+mydata <- data.cmed.s[data.ann[, "wellType"] == "sample", ]
+mydata2 <- mydata[, colnames(mydata) %in% as.character(pdata2$names)]
+source("compare_cellLines_allSamples.R")
+table.cmed.all <- table.res
+
+table.qn.hits <- table.cmed.hits <- NULL
+for(xc in 1:length(coff)) table.qn.hits   <- cbind(table.qn.hits, table.qn.all <= coff[xc])
+for(xc in 1:length(coff)) table.cmed.hits <- cbind(table.cmed.hits, table.cmed.all <= coff[xc])
+colnames(table.qn.hits) <- colnames(table.cmed.hits) <- 
+  paste(rep(colnames(table.qn.all), length(coff)), rep(coff, each=ncol(table.qn.all)))
+
+# obtaining the overlap table
+table.ov <- table.qn.hits&table.cmed.hits
+
+sum.hits.qn <- colMeans(table.qn.hits)
+sum.hits.cme <- colMeans(table.cmed.hits)
+sum.hits.ov <- colMeans(table.ov)
+
+myylim <- c(0, max(cbind(sum.hits.qn, sum.hits.cme)))
+mycols <- rep(rainbow(n=ncol(table.qn.all), start=0.1, end=0.9), length(coff))
+par(las=2, mar=c(7,4,4,1))
+plot(sum.hits.cme[1:10], main="Proportion of hits per data set and cell line pair", xaxt="none", 
+     ylab="proportion of hits", pch=1, col=mycols, ylim = myylim, xlab="")
+axis(side=1, at=1:10, labels = names(sum.hits.ov)[1:10], cex.axis = .6)
+points(sum.hits.qn[1:10], pch=2, col=mycols)
+points(sum.hits.ov[1:10], pch=3, col=mycols)
+#legend("topright", legend=colnames(table.qn.all), fill = mycols, cex=.6)
+legend("topleft", legend=c("medCent", "rscreenorm", "overlap"), pch=1:3, col="black", cex=0.6)
+
+```
+
+The graph below is based upon the cell line effect, corrected for time. From it it is clear that, in general, using median-centered data yields more hits than using rscreenorm data, but that this difference is much larger for pairs involving RPE1. 
+
+```{r plotHitsAllSamplesPlusT0, fig.width=8, fig.height=6}
+library(limma)
+# This code chunk from estimate_reprod_allCL2_pt0.R
+coff <- c(0.01, 0.001, 0.0001) # coefficients to be used as cut-offs when checking for overlap between hit lists
+
+source("intro_reprod_pt0.R") # This depends on pdata only, so it is common for both datasets
+# Code chunk below from get_hits_overlap_pt0.R 
+# here we obtain table.ov, a logical matrix with hits overlapping between cell lines
+mydata <- data.qn # this already does not involve controls
+myann <- data.ann[data.ann[, "wellType"] == "sample", ]
+mydata2 <- mydata[, colnames(mydata) %in% as.character(pdata2$names)]
+source("compare_cellLines_allSamples_pt0.R")
+table.qn.cl.all <- table.res.cl
+table.qn.int.all <- table.res.int
+
+mydata <- data.cmed.s # data matrix with columns to use, includes controls
+myann <- data.ann[data.ann[, "wellType"] == "sample", ]
+mydata <- data.cmed.s[data.ann[, "wellType"] == "sample", ]
+mydata2 <- mydata[, colnames(mydata) %in% as.character(pdata2$names)]
+source("compare_cellLines_allSamples_pt0.R")
+table.cmed.cl.all <- table.res.cl
+table.cmed.int.all <- table.res.int
+
+table.qn.cl.hits <- table.cmed.cl.hits <- table.qn.int.hits <- table.cmed.int.hits <- NULL
+for(xc in 1:length(coff)) table.qn.cl.hits   <- cbind(table.qn.cl.hits, table.qn.cl.all <= coff[xc])
+for(xc in 1:length(coff)) table.cmed.cl.hits <- cbind(table.cmed.cl.hits, table.cmed.cl.all <= coff[xc])
+for(xc in 1:length(coff)) table.qn.int.hits   <- cbind(table.qn.int.hits, table.qn.int.all <= coff[xc])
+for(xc in 1:length(coff)) table.cmed.int.hits <- cbind(table.cmed.int.hits, table.cmed.int.all <= coff[xc])
+colnames(table.qn.cl.hits) <- colnames(table.cmed.cl.hits) <-
+  colnames(table.qn.int.hits) <- colnames(table.cmed.int.hits) <-
+  paste(rep(colnames(table.qn.cl.all), length(coff)), rep(coff, each=ncol(table.qn.cl.all)))
+
+# obtaining the overlap table
+table.ov.cl  <- table.qn.cl.hits & table.cmed.cl.hits
+table.ov.int <- table.qn.int.hits & table.cmed.int.hits
+
+sum.hits.cl.qn <- colMeans(table.qn.cl.hits)
+sum.hits.int.qn <- colMeans(table.qn.int.hits)
+sum.hits.cl.cme <- colMeans(table.cmed.cl.hits)
+sum.hits.int.cme <- colMeans(table.cmed.int.hits)
+sum.hits.cl.ov <- colMeans(table.ov.cl)
+sum.hits.int.ov <- colMeans(table.ov.int)
+
+# For cl effect, graphs of hits
+sum.hits.qn <- sum.hits.cl.qn 
+sum.hits.cme <- sum.hits.cl.cme
+sum.hits.ov <- sum.hits.cl.ov
+table.qn.all <- table.qn.cl.all
+myname <- "cl effect"
+source("graphs_hits_forRmd.R")
+vpairs.cl <- rep(colnames(table.qn.all), length(coff))
+vcoff.cl <- rep(coff, each=ncol(table.qn.all))
+
+```
+
+Conclusions are similar if we use the hits yielded by the interaction between time and cell line (see below).
+
+```{r plotHitsAllSamplesPlusT0.2, fig.width=8, fig.height=6}
+# For cl*time effect, graphs of hits
+sum.hits.qn <- sum.hits.int.qn 
+sum.hits.cme <- sum.hits.int.cme
+sum.hits.ov <- sum.hits.int.ov
+table.qn.all <- table.qn.int.all
+myname <- "int effect"
+source("graphs_hits_forRmd.R")
+vpairs.int <- rep(colnames(table.qn.all), length(coff))
+vcoff.int <- rep(coff, each=ncol(table.qn.all))
+
+```
+
+```{r scatterplotOverlap, eval=FALSE}
+# Results below were for the analysis without T=0
+# Code chunk below comes from plots_ov.R
+u.pairs <- matrix(c(1,2,1,3,1,4,1,5,2,3,2,5,3,5,4,5), nrow=2, ncol=9) # pairs used -add ,2,4
+res.s.qn <- res.ns.qn <- res.s.cm <- res.ns.cm <- vector("list", ncol(u.pairs))
+vres.s.qn <- vres.ns.qn <- vres.s.cm <- vres.ns.cm <- NULL
+v.myn <- NULL
+for(xu in 1:ncol(u.pairs))
+{
+  px <- u.pairs[, xu] # selecting the pair
+  myn <- paste(cl[c(px[1], px[2])], collapse=" ")
+  v.myn <- c(v.myn, myn)
+  newname <- "rscreenorm"
+  load(paste(mydir.output, "/ctab_", newname, myn,"_sign.RData", sep="")) # res.s
+  load(paste(mydir.output, "/ctab_", newname, myn,"_nsign.RData", sep="")) # res.ns
+  colnames(res.s) <- colnames(res.ns) <- paste(colnames(res.s), rep(myn, length(coff)))
+  if(is.null(vres.s.qn)) { vres.s.qn  <- cbind(res.s, rep(myn, nrow(res.s)))
+                           vres.ns.qn <- cbind(res.ns, rep(myn, nrow(res.s)))
+  } else { vres.s.qn  <- rbind(vres.s.qn, cbind(res.s, rep(myn, nrow(res.s))))
+           vres.ns.qn <- rbind(vres.ns.qn, cbind(res.ns, rep(myn, nrow(res.s))))
+  }
+  res.s.qn[[xu]] <- res.s
+  res.ns.qn[[xu]] <- res.ns
+  newname <- "medCent"
+  load(paste(mydir.output, "/ctab_", newname, myn,"_sign.RData", sep="")) # res.s
+  load(paste(mydir.output, "/ctab_", newname, myn,"_nsign.RData", sep="")) # res.ns
+  colnames(res.s) <- colnames(res.ns) <- paste(colnames(res.s), rep(myn, length(coff)))
+  if(is.null(vres.s.cm)) { vres.s.cm  <- cbind(res.s, rep(myn, nrow(res.s)))
+                          vres.ns.cm <- cbind(res.ns, rep(myn, nrow(res.s)))
+  } else { vres.s.cm  <- rbind(vres.s.cm, cbind(res.s, rep(myn, nrow(res.s))))
+           vres.ns.cm <- rbind(vres.ns.cm, cbind(res.ns, rep(myn, nrow(res.s))))
+  }
+  res.s.cm[[xu]] <- res.s
+  res.ns.cm[[xu]] <- res.ns
+}
+v.co <- rep(coff, ncol(u.pairs))
+
+# Gathering all results for overlap sign hits, and also for ns hits
+vres.s <- rbind( cbind(vres.s.qn, rep("rscreenorm", nrow(vres.s.qn))), 
+                 cbind(vres.s.cm, rep("medCent", nrow(vres.s.cm))) )
+
+vres.ns <- rbind( cbind(vres.ns.qn, rep("rscreenorm", nrow(vres.s.qn))), 
+                  cbind(vres.ns.cm, rep("medCent", nrow(vres.s.cm))) )
+
+# graph scatterplot 01 singleGraph
+for(xj in 1:length(coff))
+{
+  myx <- as.numeric(vres.s.cm[, xj])/nrow(mydata)
+  myy <- as.numeric(vres.s.qn[, xj])/nrow(mydata)
+  mylim <- c(0, 1)
+  d1 <- densCols(myx, myy)
+  plot(myx, myy, main=paste("cut-off", round(coff[xj], 4)), pch=20, cex=.5, col=d1,
+                xlab="medCent", ylab="rscreenorm", xlim= mylim, ylim= mylim)
+  segments(0,0,mylim[2],mylim[2], lty="dashed", col="gray")
+  myx <- as.numeric(vres.ns.cm[, xj])/nrow(mydata)
+  myy <- as.numeric(vres.ns.qn[, xj])/nrow(mydata)
+  d2 <- densCols(myx, myy, colramp=colorRampPalette(c("magenta1", "magenta2", "magenta3", "magenta4", "purple4")))
+  points(myx, myy, col=d2, pch=20, cex=.5)
+  legend("topleft", legend=c("overlap significant hits", "overlap nsign hits"), fill=c("dodgerblue2","magenta2"))
+}
+
+
+```
+
+
+```{r overlapHitsSel, eval=FALSE}
+# Results below were for the analysis without T=0
+
+## All results, separately for sign/Nsign
+# We now use only 0.01 as cut-off
+mpair <- NULL
+myres <- vres.s.qn
+mpair <- tapply(as.numeric(myres[, 1]), list(factor(myres[,4])), median, na.rm=T )
+myres <- vres.s.cm
+mpair <- cbind(mpair, tapply(as.numeric(myres[, 1]), list(factor(myres[,4])), median, na.rm=T) )
+myres <- vres.ns.qn
+mpair <- cbind(mpair, tapply(as.numeric(myres[, 1]), list(factor(myres[,4])), median, na.rm=T) )
+myres <- vres.ns.cm
+mpair <- cbind(mpair, tapply(as.numeric(myres[, 1]), list(factor(myres[,4])), median, na.rm=T) )
+colnames(mpair) <- paste(rep(c("qn","cm"),2),  rep(c("s", "ns"), each=2))
+# Selecting the sums of hits for 0.01 and cell line pairs used
+
+# First using hits that overlap between qn and cmed, using all samples
+s.hits <- sum.hits.ov
+s.hits <- s.hits[1:10] # only those for 0.01
+s.hits <- s.hits[-c(6,8)]
+mcols <- rep(c("purple", "blue"), 2)
+xk <- 1
+plot(s.hits, mpair[, xk], pch=xk, col=mcols[xk], xlab="number hits all data, overlap", 
+     ylab="median overlap hits", ylim=range(mpair))
+for(xk in 2:4) points(s.hits, mpair[, xk], pch=xk, col=mcols[xk])
+legend("topright", legend=colnames(mpair), pch=1:4, col=mcols, cex=.7)
+```
+
+We conclude that median-centering may introduce a bias by shifting data distributions regardless of the functional range.  In addition, there is no guarantee that the result will represent the functional outcome fairly, since some cell lines may grow more and/or naturally produce read counts varying within a wider range, as is the case with HCT116_1, which the mere centering (or library-size correction) will not correct for. Our rscreenorm method, on the other hand, will correct for these effects and yield values that can be fairly compared. 
+
+Variation in growth speed can be strongly experiment-dependent and less reproducible across multiple runs of the same experient and laboratories. As such, these effects should be corrected for, preserving the essence of the data. Our rscreenorm does this by using the controls, so as to preserve the functional range per replicate. Effects remaining should therefore be more reproducible in other runs and/or labs.
+
+
+
